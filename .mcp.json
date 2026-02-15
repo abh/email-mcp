@@ -1,8 +1,10 @@
 {
-  "imap": {
-    "type": "stdio",
-    "command": "node",
-    "args": ["/Users/marlinjai/software dev/clean-my-email/mcp-server/dist/index.js"],
-    "env": {}
+  "mcpServers": {
+    "imap": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/Users/marlinjai/software dev/clean-my-email/mcp-server/dist/index.js"],
+      "env": {}
+    }
   }
 }
