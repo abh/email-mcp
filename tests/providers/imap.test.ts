@@ -77,15 +77,34 @@ vi.mock('imapflow', () => {
       }
     });
 
-    // Make fetch iterable via fetchAll helper
     fetchOne = vi.fn().mockImplementation(() => {
       return Promise.resolve(mockFetchMessages[0] || null);
     });
+
+    messageMove = vi.fn().mockResolvedValue(undefined);
+    messageDelete = vi.fn().mockResolvedValue(undefined);
+    messageFlagsAdd = vi.fn().mockResolvedValue(undefined);
+    messageFlagsRemove = vi.fn().mockResolvedValue(undefined);
+    mailboxCreate = vi.fn().mockResolvedValue({ path: 'NewFolder', name: 'NewFolder' });
+    mailboxOpen = vi.fn().mockResolvedValue(undefined);
 
     constructor(_config: any) {}
   }
   return { ImapFlow: MockImapFlow };
 });
+
+// Mock nodemailer
+const { mockSendMail } = vi.hoisted(() => {
+  const mockSendMail = vi.fn().mockResolvedValue({ messageId: '<sent-1@example.com>' });
+  return { mockSendMail };
+});
+vi.mock('nodemailer', () => ({
+  default: {
+    createTransport: vi.fn().mockReturnValue({
+      sendMail: mockSendMail,
+    }),
+  },
+}));
 
 // Mock mailparser
 vi.mock('mailparser', () => ({
@@ -296,5 +315,118 @@ describe('ImapAdapter search and getEmail', () => {
   it('releases mailbox lock after search', async () => {
     await adapter.search({ folder: 'INBOX' });
     expect(mockMailboxLockRelease).toHaveBeenCalled();
+  });
+});
+
+describe('ImapAdapter send, move, delete, mark, createFolder', () => {
+  let adapter: ImapAdapter;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    adapter = new ImapAdapter();
+    mockSearchResult = [1, 2, 3];
+    mockFetchMessages = [
+      createMockMessage(1, { subject: 'First', text: 'uid-1 body' }),
+    ];
+    await adapter.connect(testCredentials);
+  });
+
+  it('sendEmail calls SMTP transport with correct params', async () => {
+    const result = await adapter.sendEmail({
+      to: [{ name: 'Bob', email: 'bob@test.com' }],
+      subject: 'Hello',
+      body: { text: 'Hi Bob', html: '<p>Hi Bob</p>' },
+    });
+    expect(result.id).toBeTruthy();
+    expect(mockSendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: 'test@example.com',
+        to: '"Bob" <bob@test.com>',
+        subject: 'Hello',
+        text: 'Hi Bob',
+        html: '<p>Hi Bob</p>',
+      })
+    );
+  });
+
+  it('sendEmail handles cc and bcc', async () => {
+    await adapter.sendEmail({
+      to: [{ email: 'bob@test.com' }],
+      cc: [{ email: 'cc@test.com' }],
+      bcc: [{ email: 'bcc@test.com' }],
+      subject: 'Test',
+      body: { text: 'body' },
+    });
+    expect(mockSendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cc: 'cc@test.com',
+        bcc: 'bcc@test.com',
+      })
+    );
+  });
+
+  it('moveEmail calls messageMove with correct params', async () => {
+    await adapter.moveEmail('123', 'Archive');
+    const client = (adapter as any).client;
+    expect(client.getMailboxLock).toHaveBeenCalledWith('INBOX');
+    expect(client.messageMove).toHaveBeenCalledWith('123', 'Archive', { uid: true });
+  });
+
+  it('deleteEmail moves to Trash by default', async () => {
+    await adapter.deleteEmail('456');
+    const client = (adapter as any).client;
+    expect(client.messageMove).toHaveBeenCalledWith('456', 'Trash', { uid: true });
+  });
+
+  it('deleteEmail permanently deletes when permanent=true', async () => {
+    await adapter.deleteEmail('456', true);
+    const client = (adapter as any).client;
+    expect(client.messageDelete).toHaveBeenCalledWith('456', { uid: true });
+  });
+
+  it('markEmail adds \\Seen flag when read=true', async () => {
+    await adapter.markEmail('789', { read: true });
+    const client = (adapter as any).client;
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith('789', ['\\Seen'], { uid: true });
+  });
+
+  it('markEmail removes \\Seen flag when read=false', async () => {
+    await adapter.markEmail('789', { read: false });
+    const client = (adapter as any).client;
+    expect(client.messageFlagsRemove).toHaveBeenCalledWith('789', ['\\Seen'], { uid: true });
+  });
+
+  it('markEmail adds \\Flagged when starred=true', async () => {
+    await adapter.markEmail('789', { starred: true });
+    const client = (adapter as any).client;
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith('789', ['\\Flagged'], { uid: true });
+  });
+
+  it('markEmail removes \\Flagged when starred=false', async () => {
+    await adapter.markEmail('789', { starred: false });
+    const client = (adapter as any).client;
+    expect(client.messageFlagsRemove).toHaveBeenCalledWith('789', ['\\Flagged'], { uid: true });
+  });
+
+  it('markEmail handles flagged param', async () => {
+    await adapter.markEmail('789', { flagged: true });
+    const client = (adapter as any).client;
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith('789', ['\\Flagged'], { uid: true });
+  });
+
+  it('createFolder calls mailboxCreate', async () => {
+    const folder = await adapter.createFolder('NewFolder');
+    const client = (adapter as any).client;
+    expect(client.mailboxCreate).toHaveBeenCalledWith('NewFolder');
+    expect(folder.name).toBe('NewFolder');
+    expect(folder.path).toBe('NewFolder');
+  });
+
+  it('createFolder with parent path', async () => {
+    const client = (adapter as any).client;
+    client.mailboxCreate.mockResolvedValueOnce({ path: 'Parent/Child', name: 'Child' });
+    const folder = await adapter.createFolder('Child', 'Parent');
+    expect(client.mailboxCreate).toHaveBeenCalledWith('Parent/Child');
+    expect(folder.path).toBe('Parent/Child');
   });
 });

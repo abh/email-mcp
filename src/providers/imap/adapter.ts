@@ -11,8 +11,9 @@ import type {
   ProviderTypeValue,
   PasswordCredentials,
 } from '../../models/types.js';
-import { ProviderType } from '../../models/types.js';
+import { ProviderType, FolderType } from '../../models/types.js';
 import { mapImapFolder, mapParsedEmail } from './mapper.js';
+import { createSmtpTransport, sendViaSmtp } from './smtp.js';
 
 export class ImapAdapter implements EmailProvider {
   readonly providerType: ProviderTypeValue = ProviderType.IMAP;
@@ -65,8 +66,16 @@ export class ImapAdapter implements EmailProvider {
     return imapFolders.map(mapImapFolder);
   }
 
-  async createFolder(_name: string, _parentPath?: string): Promise<Folder> {
-    throw new Error('Not implemented yet');
+  async createFolder(name: string, parentPath?: string): Promise<Folder> {
+    if (!this.client) throw new Error('Not connected');
+    const fullPath = parentPath ? `${parentPath}/${name}` : name;
+    const result = await this.client.mailboxCreate(fullPath);
+    return {
+      id: result.path,
+      name: result.name || name,
+      path: result.path,
+      type: FolderType.Other,
+    };
   }
 
   protected buildSearchCriteria(query: SearchQuery): Record<string, any> {
@@ -144,8 +153,11 @@ export class ImapAdapter implements EmailProvider {
     throw new Error('Not implemented yet');
   }
 
-  async sendEmail(_params: SendEmailParams): Promise<{ id: string; threadId?: string }> {
-    throw new Error('Not implemented yet');
+  async sendEmail(params: SendEmailParams): Promise<{ id: string; threadId?: string }> {
+    if (!this.passwordCreds) throw new Error('No credentials available');
+    const transport = createSmtpTransport(this.email, this.passwordCreds);
+    const messageId = await sendViaSmtp(transport, this.email, params);
+    return { id: messageId };
   }
 
   async createDraft(_params: SendEmailParams): Promise<{ id: string }> {
@@ -156,15 +168,47 @@ export class ImapAdapter implements EmailProvider {
     throw new Error('Not implemented yet');
   }
 
-  async moveEmail(_emailId: string, _targetFolder: string): Promise<void> {
-    throw new Error('Not implemented yet');
+  async moveEmail(emailId: string, targetFolder: string): Promise<void> {
+    if (!this.client) throw new Error('Not connected');
+    const lock = await this.client.getMailboxLock('INBOX');
+    try {
+      await this.client.messageMove(emailId, targetFolder, { uid: true });
+    } finally {
+      lock.release();
+    }
   }
 
-  async deleteEmail(_emailId: string, _permanent?: boolean): Promise<void> {
-    throw new Error('Not implemented yet');
+  async deleteEmail(emailId: string, permanent?: boolean): Promise<void> {
+    if (!this.client) throw new Error('Not connected');
+    const lock = await this.client.getMailboxLock('INBOX');
+    try {
+      if (permanent) {
+        await this.client.messageDelete(emailId, { uid: true });
+      } else {
+        await this.client.messageMove(emailId, 'Trash', { uid: true });
+      }
+    } finally {
+      lock.release();
+    }
   }
 
-  async markEmail(_emailId: string, _flags: { read?: boolean; starred?: boolean; flagged?: boolean }): Promise<void> {
-    throw new Error('Not implemented yet');
+  async markEmail(emailId: string, flags: { read?: boolean; starred?: boolean; flagged?: boolean }): Promise<void> {
+    if (!this.client) throw new Error('Not connected');
+    const lock = await this.client.getMailboxLock('INBOX');
+    try {
+      if (flags.read === true) {
+        await this.client.messageFlagsAdd(emailId, ['\\Seen'], { uid: true });
+      } else if (flags.read === false) {
+        await this.client.messageFlagsRemove(emailId, ['\\Seen'], { uid: true });
+      }
+
+      if (flags.starred === true || flags.flagged === true) {
+        await this.client.messageFlagsAdd(emailId, ['\\Flagged'], { uid: true });
+      } else if (flags.starred === false || flags.flagged === false) {
+        await this.client.messageFlagsRemove(emailId, ['\\Flagged'], { uid: true });
+      }
+    } finally {
+      lock.release();
+    }
   }
 }
