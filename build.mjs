@@ -8,7 +8,16 @@ const options = {
   format: 'esm',
   outdir: 'dist',
   sourcemap: true,
-  external: ['inquirer'],
+  external: [
+    'inquirer',
+    'google-auth-library',
+    'googleapis',
+    '@azure/msal-node',
+    '@microsoft/microsoft-graph-client',
+    'imapflow',
+    'mailparser',
+    'nodemailer',
+  ],
   banner: {
     js: '#!/usr/bin/env node',
   },

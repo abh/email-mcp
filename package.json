@@ -5,13 +5,14 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "email-mcp": "dist/index.js"
+    "email-mcp": "dist/index.js",
+    "email-mcp-setup": "dist/setup/wizard.js"
   },
   "scripts": {
     "build": "node build.mjs",
     "dev": "node build.mjs --watch",
     "start": "node dist/index.js",
-    "setup": "node dist/setup.js",
+    "setup": "node dist/setup/wizard.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "EMAIL_MCP_INTEGRATION=1 vitest run tests/integration"
