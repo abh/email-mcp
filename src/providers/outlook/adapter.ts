@@ -152,35 +152,115 @@ export class OutlookAdapter implements EmailProvider {
     };
   }
 
-  // Methods to be fully implemented in Task 15
-  async sendEmail(_params: SendEmailParams): Promise<{ id: string; threadId?: string }> {
-    throw new Error('Not implemented yet');
+  async sendEmail(params: SendEmailParams): Promise<{ id: string; threadId?: string }> {
+    const client = this.ensureClient();
+    const message = this.buildGraphMessage(params);
+
+    const payload: any = { message };
+    if (params.attachments?.length) {
+      payload.message.attachments = params.attachments.map((att) => ({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: att.filename,
+        contentType: att.contentType,
+        contentBytes: att.content.toString('base64'),
+      }));
+    }
+
+    await client.api('/me/sendMail').post(payload);
+
+    return { id: `sent-${Date.now()}` };
   }
 
-  async createDraft(_params: SendEmailParams): Promise<{ id: string }> {
-    throw new Error('Not implemented yet');
+  async createDraft(params: SendEmailParams): Promise<{ id: string }> {
+    const client = this.ensureClient();
+    const message = this.buildGraphMessage(params);
+
+    const result = await client.api('/me/messages').post(message);
+    return { id: result.id };
   }
 
-  async listDrafts(_limit?: number, _offset?: number): Promise<Email[]> {
-    throw new Error('Not implemented yet');
+  async listDrafts(limit?: number, offset?: number): Promise<Email[]> {
+    const client = this.ensureClient();
+    let request = client.api('/me/mailFolders/drafts/messages');
+
+    if (limit !== undefined) {
+      request = request.top(limit);
+    }
+    if (offset !== undefined) {
+      request = request.skip(offset);
+    }
+
+    request = request.orderby('receivedDateTime desc');
+
+    const response = await request.get();
+    return (response.value || []).map((msg: any) => mapGraphMessage(msg, this.accountId));
   }
 
-  async moveEmail(_emailId: string, _targetFolder: string): Promise<void> {
-    throw new Error('Not implemented yet');
+  async moveEmail(emailId: string, targetFolder: string): Promise<void> {
+    const client = this.ensureClient();
+    await client.api(`/me/messages/${emailId}/move`).post({
+      destinationId: targetFolder,
+    });
   }
 
-  async deleteEmail(_emailId: string, _permanent?: boolean): Promise<void> {
-    throw new Error('Not implemented yet');
+  async deleteEmail(emailId: string, permanent?: boolean): Promise<void> {
+    const client = this.ensureClient();
+    if (permanent) {
+      await client.api(`/me/messages/${emailId}`).delete();
+    } else {
+      await client.api(`/me/messages/${emailId}/move`).post({
+        destinationId: 'deleteditems',
+      });
+    }
   }
 
   async markEmail(
-    _emailId: string,
-    _flags: { read?: boolean; starred?: boolean; flagged?: boolean }
+    emailId: string,
+    flags: { read?: boolean; starred?: boolean; flagged?: boolean }
   ): Promise<void> {
-    throw new Error('Not implemented yet');
+    const client = this.ensureClient();
+    const patch: any = {};
+
+    if (flags.read !== undefined) {
+      patch.isRead = flags.read;
+    }
+    if (flags.starred !== undefined) {
+      patch.importance = flags.starred ? 'high' : 'normal';
+    }
+    if (flags.flagged !== undefined) {
+      patch.flag = { flagStatus: flags.flagged ? 'flagged' : 'notFlagged' };
+    }
+
+    await client.api(`/me/messages/${emailId}`).patch(patch);
   }
 
   async getCategories(): Promise<string[]> {
-    throw new Error('Not implemented yet');
+    const client = this.ensureClient();
+    const response = await client.api('/me/outlook/masterCategories').get();
+    return (response.value || []).map((cat: any) => cat.displayName);
+  }
+
+  private buildGraphMessage(params: SendEmailParams): any {
+    const toGraphRecipient = (contact: { name?: string; email: string }) => ({
+      emailAddress: { name: contact.name, address: contact.email },
+    });
+
+    const bodyContent = params.body.html || params.body.text || '';
+    const contentType = params.body.html ? 'html' : 'text';
+
+    const message: any = {
+      subject: params.subject,
+      body: { contentType, content: bodyContent },
+      toRecipients: params.to.map(toGraphRecipient),
+    };
+
+    if (params.cc?.length) {
+      message.ccRecipients = params.cc.map(toGraphRecipient);
+    }
+    if (params.bcc?.length) {
+      message.bccRecipients = params.bcc.map(toGraphRecipient);
+    }
+
+    return message;
   }
 }

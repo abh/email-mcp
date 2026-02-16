@@ -424,4 +424,307 @@ describe('OutlookAdapter', () => {
       await expect(adapter.listFolders()).rejects.toThrow('Not connected');
     });
   });
+
+  describe('sendEmail', () => {
+    it('calls POST /me/sendMail with correct payload', async () => {
+      const mockSendRequest = createMockGraphRequest();
+      mockApiRequests.set('/me/sendMail', mockSendRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      const result = await adapter.sendEmail({
+        to: [{ name: 'Bob', email: 'bob@test.com' }],
+        cc: [{ email: 'carol@test.com' }],
+        subject: 'Test Subject',
+        body: { html: '<p>Hello</p>' },
+      });
+
+      expect(mockSendRequest.post).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            subject: 'Test Subject',
+            body: { contentType: 'html', content: '<p>Hello</p>' },
+            toRecipients: [{ emailAddress: { name: 'Bob', address: 'bob@test.com' } }],
+            ccRecipients: [{ emailAddress: { name: undefined, address: 'carol@test.com' } }],
+          }),
+        })
+      );
+
+      expect(result).toHaveProperty('id');
+    });
+
+    it('sends plain text body when no html provided', async () => {
+      const mockSendRequest = createMockGraphRequest();
+      mockApiRequests.set('/me/sendMail', mockSendRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      await adapter.sendEmail({
+        to: [{ email: 'bob@test.com' }],
+        subject: 'Plain',
+        body: { text: 'Plain text content' },
+      });
+
+      expect(mockSendRequest.post).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            body: { contentType: 'text', content: 'Plain text content' },
+          }),
+        })
+      );
+    });
+  });
+
+  describe('createDraft', () => {
+    it('calls POST /me/messages to create a draft', async () => {
+      const mockDraftRequest = createMockGraphRequest({ id: 'draft-123' });
+      mockApiRequests.set('/me/messages', mockDraftRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      const result = await adapter.createDraft({
+        to: [{ email: 'bob@test.com' }],
+        subject: 'Draft Subject',
+        body: { text: 'Draft body' },
+      });
+
+      expect(result.id).toBe('draft-123');
+      expect(mockDraftRequest.post).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subject: 'Draft Subject',
+          toRecipients: [{ emailAddress: { name: undefined, address: 'bob@test.com' } }],
+        })
+      );
+    });
+  });
+
+  describe('listDrafts', () => {
+    it('fetches messages from Drafts folder', async () => {
+      const mockDraftsRequest = createMockGraphRequest({
+        value: [
+          {
+            id: 'draft-1',
+            conversationId: 'conv-d1',
+            parentFolderId: 'drafts-folder',
+            from: { emailAddress: { name: 'Me', address: 'test@outlook.com' } },
+            toRecipients: [{ emailAddress: { name: 'Bob', address: 'bob@test.com' } }],
+            ccRecipients: [],
+            bccRecipients: [],
+            subject: 'Draft email',
+            receivedDateTime: '2026-02-15T14:00:00Z',
+            body: { contentType: 'text', content: 'Draft content' },
+            bodyPreview: 'Draft content',
+            hasAttachments: false,
+            isRead: true,
+            flag: { flagStatus: 'notFlagged' },
+            isDraft: true,
+            importance: 'normal',
+            categories: [],
+          },
+        ],
+      });
+      mockApiRequests.set('/me/mailFolders/drafts/messages', mockDraftsRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      const drafts = await adapter.listDrafts(10, 0);
+
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0].flags.draft).toBe(true);
+      expect(drafts[0].subject).toBe('Draft email');
+      expect(mockDraftsRequest.top).toHaveBeenCalledWith(10);
+      expect(mockDraftsRequest.skip).toHaveBeenCalledWith(0);
+    });
+  });
+
+  describe('moveEmail', () => {
+    it('calls POST /me/messages/{id}/move with destination folder', async () => {
+      const mockMoveRequest = createMockGraphRequest({ id: 'msg-1' });
+      mockApiRequests.set('/me/messages/msg-1/move', mockMoveRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      await adapter.moveEmail('msg-1', 'target-folder-id');
+
+      expect(mockMoveRequest.post).toHaveBeenCalledWith({
+        destinationId: 'target-folder-id',
+      });
+    });
+  });
+
+  describe('deleteEmail', () => {
+    it('moves to Deleted Items by default', async () => {
+      const mockMoveRequest = createMockGraphRequest({ id: 'msg-1' });
+      mockApiRequests.set('/me/messages/msg-1/move', mockMoveRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      await adapter.deleteEmail('msg-1');
+
+      expect(mockMoveRequest.post).toHaveBeenCalledWith({
+        destinationId: 'deleteditems',
+      });
+    });
+
+    it('permanently deletes when permanent flag is true', async () => {
+      const mockDeleteRequest = createMockGraphRequest();
+      mockApiRequests.set('/me/messages/msg-1', mockDeleteRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      await adapter.deleteEmail('msg-1', true);
+
+      expect(mockDeleteRequest.delete).toHaveBeenCalled();
+    });
+  });
+
+  describe('markEmail', () => {
+    it('patches isRead when read flag provided', async () => {
+      const mockPatchRequest = createMockGraphRequest();
+      mockApiRequests.set('/me/messages/msg-1', mockPatchRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      await adapter.markEmail('msg-1', { read: true });
+
+      expect(mockPatchRequest.patch).toHaveBeenCalledWith(
+        expect.objectContaining({ isRead: true })
+      );
+    });
+
+    it('patches importance when starred flag provided', async () => {
+      const mockPatchRequest = createMockGraphRequest();
+      mockApiRequests.set('/me/messages/msg-1', mockPatchRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      await adapter.markEmail('msg-1', { starred: true });
+
+      expect(mockPatchRequest.patch).toHaveBeenCalledWith(
+        expect.objectContaining({ importance: 'high' })
+      );
+    });
+
+    it('patches flag status when flagged flag provided', async () => {
+      const mockPatchRequest = createMockGraphRequest();
+      mockApiRequests.set('/me/messages/msg-1', mockPatchRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      await adapter.markEmail('msg-1', { flagged: true });
+
+      expect(mockPatchRequest.patch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          flag: { flagStatus: 'flagged' },
+        })
+      );
+    });
+
+    it('handles multiple flags at once', async () => {
+      const mockPatchRequest = createMockGraphRequest();
+      mockApiRequests.set('/me/messages/msg-1', mockPatchRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      await adapter.markEmail('msg-1', { read: false, flagged: false });
+
+      expect(mockPatchRequest.patch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isRead: false,
+          flag: { flagStatus: 'notFlagged' },
+        })
+      );
+    });
+  });
+
+  describe('getCategories', () => {
+    it('returns categories from a message', async () => {
+      const mockCategoriesRequest = createMockGraphRequest({
+        value: [
+          { displayName: 'Red category', color: 'preset0' },
+          { displayName: 'Blue category', color: 'preset1' },
+          { displayName: 'Green category', color: 'preset2' },
+        ],
+      });
+      mockApiRequests.set('/me/outlook/masterCategories', mockCategoriesRequest);
+
+      await adapter.connect({
+        id: 'outlook-1',
+        name: 'Test',
+        provider: 'outlook',
+        email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+
+      const categories = await adapter.getCategories();
+
+      expect(categories).toEqual(['Red category', 'Blue category', 'Green category']);
+    });
+  });
 });
