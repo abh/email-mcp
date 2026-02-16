@@ -87,6 +87,7 @@ vi.mock('imapflow', () => {
     messageFlagsRemove = vi.fn().mockResolvedValue(undefined);
     mailboxCreate = vi.fn().mockResolvedValue({ path: 'NewFolder', name: 'NewFolder' });
     mailboxOpen = vi.fn().mockResolvedValue(undefined);
+    append = vi.fn().mockResolvedValue({ uid: 100 });
 
     constructor(_config: any) {}
   }
@@ -428,5 +429,115 @@ describe('ImapAdapter send, move, delete, mark, createFolder', () => {
     const folder = await adapter.createFolder('Child', 'Parent');
     expect(client.mailboxCreate).toHaveBeenCalledWith('Parent/Child');
     expect(folder.path).toBe('Parent/Child');
+  });
+});
+
+describe('ImapAdapter threads, drafts, attachments', () => {
+  let adapter: ImapAdapter;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    adapter = new ImapAdapter();
+    mockSearchResult = [1, 2, 3];
+    mockFetchMessages = [
+      createMockMessage(1, { subject: 'Thread msg 1', text: 'uid-1 body' }),
+      createMockMessage(2, { subject: 'Re: Thread msg 1', text: 'uid-2 body' }),
+      createMockMessage(3, { subject: 'Re: Thread msg 1', text: 'uid-3 body' }),
+    ];
+    await adapter.connect(testCredentials);
+  });
+
+  it('getThread searches by message id and returns Thread', async () => {
+    const thread = await adapter.getThread('<msg-1@example.com>');
+    expect(thread.id).toBe('<msg-1@example.com>');
+    expect(thread.messages).toHaveLength(3);
+    expect(thread.messageCount).toBe(3);
+    expect(thread.subject).toBeTruthy();
+    expect(thread.participants).toBeDefined();
+    expect(thread.lastMessageDate).toBeTruthy();
+  });
+
+  it('getThread calls search with header criteria', async () => {
+    await adapter.getThread('<msg-1@example.com>');
+    const client = (adapter as any).client;
+    expect(client.search).toHaveBeenCalled();
+  });
+
+  it('createDraft appends message to Drafts with \\Draft flag', async () => {
+    const result = await adapter.createDraft({
+      to: [{ email: 'bob@test.com' }],
+      subject: 'Draft subject',
+      body: { text: 'Draft body' },
+    });
+    expect(result.id).toBeTruthy();
+    const client = (adapter as any).client;
+    expect(client.append).toHaveBeenCalledWith(
+      'Drafts',
+      expect.any(String),
+      expect.arrayContaining(['\\Draft', '\\Seen']),
+    );
+  });
+
+  it('listDrafts returns emails from Drafts folder', async () => {
+    mockSearchResult = [10, 11];
+    mockFetchMessages = [
+      createMockMessage(10, { subject: 'Draft 1', text: 'uid-10 body' }),
+      createMockMessage(11, { subject: 'Draft 2', text: 'uid-11 body' }),
+    ];
+    const drafts = await adapter.listDrafts();
+    expect(drafts).toHaveLength(2);
+    const client = (adapter as any).client;
+    expect(client.getMailboxLock).toHaveBeenCalledWith('Drafts');
+  });
+
+  it('listDrafts respects limit and offset', async () => {
+    mockSearchResult = [10, 11, 12];
+    mockFetchMessages = [
+      createMockMessage(11, { text: 'uid-11 body' }),
+    ];
+    const drafts = await adapter.listDrafts(1, 1);
+    expect(drafts).toHaveLength(1);
+  });
+
+  it('getAttachment fetches email and extracts attachment', async () => {
+    // Override simpleParser mock for this test to return an attachment
+    const { simpleParser: mockParser } = await import('mailparser');
+    (mockParser as any).mockResolvedValueOnce({
+      uid: 42,
+      messageId: '<msg-42@example.com>',
+      from: { value: [{ name: 'Alice', address: 'alice@test.com' }] },
+      to: { value: [{ name: 'Bob', address: 'bob@test.com' }] },
+      subject: 'With attachment',
+      date: new Date('2026-01-15'),
+      text: 'See attached',
+      attachments: [
+        {
+          contentId: 'att-1',
+          filename: 'test.pdf',
+          contentType: 'application/pdf',
+          size: 1024,
+          content: Buffer.from('pdf-content'),
+        },
+      ],
+      flags: new Set(),
+    });
+
+    mockFetchMessages = [
+      createMockMessage(42, { text: 'uid-42 body' }),
+    ];
+
+    const { data, meta } = await adapter.getAttachment('42', 'att-1');
+    expect(meta.id).toBe('att-1');
+    expect(meta.filename).toBe('test.pdf');
+    expect(meta.contentType).toBe('application/pdf');
+    expect(meta.size).toBe(1024);
+    expect(data).toBeInstanceOf(Buffer);
+  });
+
+  it('getAttachment throws if attachment not found', async () => {
+    mockFetchMessages = [
+      createMockMessage(42, { text: 'uid-42 body' }),
+    ];
+    await expect(adapter.getAttachment('42', 'nonexistent')).rejects.toThrow();
   });
 });

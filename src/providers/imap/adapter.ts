@@ -145,12 +145,77 @@ export class ImapAdapter implements EmailProvider {
     }
   }
 
-  async getThread(_threadId: string): Promise<Thread> {
-    throw new Error('Not implemented yet');
+  async getThread(threadId: string): Promise<Thread> {
+    if (!this.client) throw new Error('Not connected');
+
+    const lock = await this.client.getMailboxLock('INBOX');
+    try {
+      // Search for messages that reference this thread ID via header
+      const uids: number[] = await this.client.search(
+        { or: [{ header: { 'message-id': threadId } }, { header: { references: threadId } }, { header: { 'in-reply-to': threadId } }] },
+        { uid: true }
+      );
+
+      if (uids.length === 0) throw new Error(`Thread ${threadId} not found`);
+
+      const messages: Email[] = [];
+      for await (const msg of this.client.fetch(uids, { source: true, uid: true, flags: true })) {
+        const parsed = await simpleParser(msg.source);
+        (parsed as any).flags = msg.flags;
+        messages.push(mapParsedEmail(parsed, 'INBOX', this.accountId, msg.uid));
+      }
+
+      // Collect unique participants
+      const participantMap = new Map<string, { name?: string; email: string }>();
+      for (const msg of messages) {
+        if (msg.from.email) participantMap.set(msg.from.email, msg.from);
+        for (const to of msg.to) {
+          if (to.email) participantMap.set(to.email, to);
+        }
+      }
+
+      // Sort messages by date
+      messages.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      return {
+        id: threadId,
+        subject: messages[0]?.subject || '(no subject)',
+        participants: Array.from(participantMap.values()),
+        messageCount: messages.length,
+        messages,
+        lastMessageDate: messages[messages.length - 1]?.date || new Date().toISOString(),
+      };
+    } finally {
+      lock.release();
+    }
   }
 
-  async getAttachment(_emailId: string, _attachmentId: string): Promise<{ data: Buffer; meta: AttachmentMeta }> {
-    throw new Error('Not implemented yet');
+  async getAttachment(emailId: string, attachmentId: string): Promise<{ data: Buffer; meta: AttachmentMeta }> {
+    if (!this.client) throw new Error('Not connected');
+
+    const lock = await this.client.getMailboxLock('INBOX');
+    try {
+      const msg = await this.client.fetchOne(String(emailId), { source: true, uid: true }, { uid: true });
+      if (!msg) throw new Error(`Email ${emailId} not found`);
+
+      const parsed = await simpleParser(msg.source);
+      const attachment = (parsed.attachments || []).find(
+        (att: any) => att.contentId === attachmentId || att.filename === attachmentId
+      );
+      if (!attachment) throw new Error(`Attachment ${attachmentId} not found in email ${emailId}`);
+
+      return {
+        data: attachment.content,
+        meta: {
+          id: attachment.contentId || attachmentId,
+          filename: attachment.filename || 'attachment',
+          contentType: attachment.contentType || 'application/octet-stream',
+          size: attachment.size || 0,
+        },
+      };
+    } finally {
+      lock.release();
+    }
   }
 
   async sendEmail(params: SendEmailParams): Promise<{ id: string; threadId?: string }> {
@@ -160,12 +225,36 @@ export class ImapAdapter implements EmailProvider {
     return { id: messageId };
   }
 
-  async createDraft(_params: SendEmailParams): Promise<{ id: string }> {
-    throw new Error('Not implemented yet');
+  async createDraft(params: SendEmailParams): Promise<{ id: string }> {
+    if (!this.client) throw new Error('Not connected');
+
+    // Build RFC 2822 message
+    const lines: string[] = [];
+    lines.push(`From: ${this.email}`);
+    lines.push(`To: ${params.to.map((c) => (c.name ? `"${c.name}" <${c.email}>` : c.email)).join(', ')}`);
+    if (params.cc?.length) {
+      lines.push(`Cc: ${params.cc.map((c) => c.email).join(', ')}`);
+    }
+    lines.push(`Subject: ${params.subject}`);
+    lines.push(`Date: ${new Date().toUTCString()}`);
+    if (params.inReplyTo) lines.push(`In-Reply-To: ${params.inReplyTo}`);
+    if (params.references?.length) lines.push(`References: ${params.references.join(' ')}`);
+    lines.push('MIME-Version: 1.0');
+    lines.push('Content-Type: text/plain; charset=utf-8');
+    lines.push('');
+    lines.push(params.body.text || '');
+
+    const rawMessage = lines.join('\r\n');
+    const result = await this.client.append('Drafts', rawMessage, ['\\Draft', '\\Seen']);
+    return { id: String(result.uid || result) };
   }
 
-  async listDrafts(_limit?: number, _offset?: number): Promise<Email[]> {
-    throw new Error('Not implemented yet');
+  async listDrafts(limit?: number, offset?: number): Promise<Email[]> {
+    return this.search({
+      folder: 'Drafts',
+      limit,
+      offset,
+    });
   }
 
   async moveEmail(emailId: string, targetFolder: string): Promise<void> {
