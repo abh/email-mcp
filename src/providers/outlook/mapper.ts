@@ -1,0 +1,113 @@
+import type { Folder, Email, Contact, AttachmentMeta, FolderTypeValue } from '../../models/types.js';
+import { FolderType } from '../../models/types.js';
+
+const WELL_KNOWN_FOLDER_MAP: Record<string, FolderTypeValue> = {
+  inbox: FolderType.Inbox,
+  sentitems: FolderType.Sent,
+  drafts: FolderType.Drafts,
+  deleteditems: FolderType.Trash,
+  junkemail: FolderType.Spam,
+  archive: FolderType.Archive,
+};
+
+export function mapGraphFolder(graphFolder: any): Folder {
+  const wellKnown = graphFolder.wellKnownName?.toLowerCase();
+  return {
+    id: graphFolder.id,
+    name: graphFolder.displayName,
+    path: graphFolder.displayName,
+    type: (wellKnown && WELL_KNOWN_FOLDER_MAP[wellKnown]) || FolderType.Other,
+    totalCount: graphFolder.totalItemCount,
+    unreadCount: graphFolder.unreadItemCount,
+  };
+}
+
+function mapGraphContact(recipient: any): Contact {
+  return {
+    name: recipient?.emailAddress?.name || undefined,
+    email: recipient?.emailAddress?.address || '',
+  };
+}
+
+function mapGraphContacts(recipients: any[]): Contact[] {
+  if (!recipients) return [];
+  return recipients.map(mapGraphContact);
+}
+
+export function mapGraphMessage(message: any, accountId: string): Email {
+  const bodyType = message.body?.contentType?.toLowerCase();
+
+  return {
+    id: message.id,
+    accountId,
+    threadId: message.conversationId,
+    folder: message.parentFolderId || '',
+    from: mapGraphContact(message.from),
+    to: mapGraphContacts(message.toRecipients),
+    cc: message.ccRecipients?.length ? mapGraphContacts(message.ccRecipients) : undefined,
+    bcc: message.bccRecipients?.length ? mapGraphContacts(message.bccRecipients) : undefined,
+    subject: message.subject || '(no subject)',
+    date: message.receivedDateTime || new Date().toISOString(),
+    body: {
+      text: bodyType === 'text' ? message.body?.content : undefined,
+      html: bodyType === 'html' ? message.body?.content : undefined,
+    },
+    snippet: message.bodyPreview,
+    attachments: [],
+    categories: message.categories || [],
+    flags: {
+      read: message.isRead ?? false,
+      starred: message.importance === 'high',
+      flagged: message.flag?.flagStatus === 'flagged',
+      draft: message.isDraft ?? false,
+    },
+  };
+}
+
+export function mapGraphAttachment(attachment: any): AttachmentMeta {
+  return {
+    id: attachment.id,
+    filename: attachment.name || 'unknown',
+    contentType: attachment.contentType || 'application/octet-stream',
+    size: attachment.size || 0,
+  };
+}
+
+export function buildGraphFilter(query: any): { filter?: string; search?: string } {
+  const filters: string[] = [];
+  const searchParts: string[] = [];
+
+  if (query.from) {
+    filters.push(`from/emailAddress/address eq '${query.from}'`);
+  }
+  if (query.to) {
+    filters.push(`toRecipients/any(r:r/emailAddress/address eq '${query.to}')`);
+  }
+  if (query.unreadOnly) {
+    filters.push('isRead eq false');
+  }
+  if (query.starredOnly) {
+    filters.push("importance eq 'high'");
+  }
+  if (query.hasAttachment) {
+    filters.push('hasAttachments eq true');
+  }
+  if (query.since) {
+    filters.push(`receivedDateTime ge ${query.since}`);
+  }
+  if (query.before) {
+    filters.push(`receivedDateTime lt ${query.before}`);
+  }
+
+  if (query.subject) {
+    searchParts.push(`subject:${query.subject}`);
+  }
+  if (query.body) {
+    searchParts.push(`body:${query.body}`);
+  }
+
+  return {
+    filter: filters.length > 0 ? filters.join(' and ') : undefined,
+    search: searchParts.length > 0 ? `"${searchParts.join(' AND ')}"` : undefined,
+  };
+}
