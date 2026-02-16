@@ -1,8 +1,5 @@
-# MCP server clone (installed separately)
-mcp-server/
-
-# OS files
-.DS_Store
-
-# Node
 node_modules/
+dist/
+*.tsbuildinfo
+.env
+credentials.enc

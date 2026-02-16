@@ -1,0 +1,47 @@
+{
+  "name": "email-mcp",
+  "version": "0.1.0",
+  "description": "Unified MCP server for email access across Gmail, Outlook, iCloud, and IMAP",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "email-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "start": "node dist/index.js",
+    "setup": "node dist/setup.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "EMAIL_MCP_INTEGRATION=1 vitest run tests/integration"
+  },
+  "keywords": [
+    "mcp",
+    "email",
+    "gmail",
+    "outlook",
+    "imap",
+    "icloud"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@azure/msal-node": "^5.0.4",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "google-auth-library": "^10.5.0",
+    "googleapis": "^171.4.0",
+    "imapflow": "^1.2.9",
+    "inquirer": "^13.2.4",
+    "mailparser": "^3.9.3",
+    "nodemailer": "^8.0.1"
+  },
+  "devDependencies": {
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^25.2.3",
+    "@types/nodemailer": "^7.0.10",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
