@@ -1,4 +1,5 @@
 import { ImapFlow } from 'imapflow';
+import { simpleParser } from 'mailparser';
 import type { EmailProvider, SendEmailParams } from '../provider.js';
 import type {
   Email,
@@ -11,7 +12,7 @@ import type {
   PasswordCredentials,
 } from '../../models/types.js';
 import { ProviderType } from '../../models/types.js';
-import { mapImapFolder } from './mapper.js';
+import { mapImapFolder, mapParsedEmail } from './mapper.js';
 
 export class ImapAdapter implements EmailProvider {
   readonly providerType: ProviderTypeValue = ProviderType.IMAP;
@@ -68,12 +69,71 @@ export class ImapAdapter implements EmailProvider {
     throw new Error('Not implemented yet');
   }
 
-  async search(_query: SearchQuery): Promise<Email[]> {
-    throw new Error('Not implemented yet');
+  protected buildSearchCriteria(query: SearchQuery): Record<string, any> {
+    const criteria: Record<string, any> = {};
+    if (query.from) criteria.from = query.from;
+    if (query.to) criteria.to = query.to;
+    if (query.subject) criteria.subject = query.subject;
+    if (query.body) criteria.body = query.body;
+    if (query.since) criteria.since = new Date(query.since);
+    if (query.before) criteria.before = new Date(query.before);
+    if (query.unreadOnly) criteria.unseen = true;
+    if (query.starredOnly) criteria.flagged = true;
+    if (query.hasAttachment) criteria.header = { 'content-type': 'multipart/mixed' };
+    return criteria;
   }
 
-  async getEmail(_id: string): Promise<Email> {
-    throw new Error('Not implemented yet');
+  async search(query: SearchQuery): Promise<Email[]> {
+    if (!this.client) throw new Error('Not connected');
+
+    const folder = query.folder || 'INBOX';
+    const lock = await this.client.getMailboxLock(folder);
+
+    try {
+      const criteria = this.buildSearchCriteria(query);
+      const allUids: number[] = await this.client.search(
+        Object.keys(criteria).length > 0 ? criteria : { all: true },
+        { uid: true }
+      );
+
+      // Apply offset and limit to the UID list
+      const offset = query.offset || 0;
+      const slicedUids = query.limit
+        ? allUids.slice(offset, offset + query.limit)
+        : allUids.slice(offset);
+
+      if (slicedUids.length === 0) return [];
+
+      const emails: Email[] = [];
+      for await (const msg of this.client.fetch(slicedUids, { source: true, uid: true, flags: true })) {
+        const parsed = await simpleParser(msg.source);
+        (parsed as any).flags = msg.flags;
+        emails.push(mapParsedEmail(parsed, folder, this.accountId, msg.uid));
+      }
+
+      return emails;
+    } finally {
+      lock.release();
+    }
+  }
+
+  async getEmail(id: string, folder?: string): Promise<Email> {
+    if (!this.client) throw new Error('Not connected');
+
+    const targetFolder = folder || 'INBOX';
+    const lock = await this.client.getMailboxLock(targetFolder);
+
+    try {
+      const uid = parseInt(id, 10);
+      const msg = await this.client.fetchOne(String(uid), { source: true, uid: true, flags: true }, { uid: true });
+      if (!msg) throw new Error(`Email ${id} not found`);
+
+      const parsed = await simpleParser(msg.source);
+      (parsed as any).flags = msg.flags;
+      return mapParsedEmail(parsed, targetFolder, this.accountId, msg.uid);
+    } finally {
+      lock.release();
+    }
   }
 
   async getThread(_threadId: string): Promise<Thread> {
