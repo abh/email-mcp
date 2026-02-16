@@ -4,7 +4,7 @@ import type { AccountManager } from '../account-manager.js';
 import type { SearchQuery } from '../models/types.js';
 
 function jsonResult(data: unknown) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(data) }] };
+  return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
 }
 
 export function registerReadingTools(server: McpServer, accountManager: AccountManager): void {

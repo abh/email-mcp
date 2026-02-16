@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { AccountManager } from './account-manager.js';
 import { registerAccountTools } from './tools/accounts.js';
+import { registerReadingTools } from './tools/reading.js';
 import { registerSendingTools } from './tools/sending.js';
 
 export interface ServerResult {
@@ -19,6 +20,7 @@ export async function createServer(accountManager?: AccountManager): Promise<Ser
 
   // Register all tool groups
   registerAccountTools(server, mgr);
+  registerReadingTools(server, mgr);
   registerSendingTools(server, mgr);
 
   return { server, accountManager: mgr };
