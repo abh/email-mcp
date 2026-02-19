@@ -8,6 +8,7 @@ import { OutlookAuth } from '../providers/outlook/auth.js';
 import type { AccountCredentials, ProviderTypeValue } from '../models/types.js';
 import { ProviderType } from '../models/types.js';
 import { AccountManager } from '../account-manager.js';
+import { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, OUTLOOK_CLIENT_ID } from '../oauth-config.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,32 +74,13 @@ async function promptAccountName(defaultName: string): Promise<string> {
 
 async function setupGmail(): Promise<void> {
   console.log('\n--- Gmail Setup ---');
-  console.log(
-    'Note: You need your own Google Cloud OAuth credentials.\n' +
-    'Create them at https://console.cloud.google.com/apis/credentials\n'
-  );
-
-  const { clientId, clientSecret } = await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'clientId',
-      message: 'Google OAuth Client ID:',
-      validate: (v: string) => v.trim().length > 0 || 'Client ID is required',
-    },
-    {
-      type: 'password',
-      name: 'clientSecret',
-      message: 'Google OAuth Client Secret:',
-      mask: '*',
-      validate: (v: string) => v.trim().length > 0 || 'Client Secret is required',
-    },
-  ]);
+  console.log('A browser window will open for Google authorization.\n');
 
   const server = new OAuthCallbackServer();
   const port = await server.start();
   const redirectUri = `http://localhost:${port}/callback`;
 
-  const gmailAuth = new GmailAuth(clientId.trim(), clientSecret.trim(), redirectUri);
+  const gmailAuth = new GmailAuth(GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, redirectUri);
   const { url, codeVerifier } = gmailAuth.getAuthUrl(redirectUri);
 
   console.log('\nOpening browser for Google authorization...');
@@ -117,14 +99,14 @@ async function setupGmail(): Promise<void> {
   console.log('Authorization code received. Exchanging for tokens...');
   const tokens = await gmailAuth.exchangeCode(code, codeVerifier);
 
-  const { email } = await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'email',
-      message: 'Gmail address:',
-      validate: (v: string) => v.includes('@') || 'Enter a valid email address',
-    },
-  ]);
+  // Fetch email from Gmail profile using the access token
+  const profileRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+    headers: { Authorization: `Bearer ${tokens.access_token}` },
+  });
+  const profile = await profileRes.json() as { emailAddress?: string };
+  const email = profile.emailAddress ?? '';
+  if (!email) throw new Error('Could not retrieve Gmail address from profile');
+  console.log(`Authenticated as ${email}`);
 
   const name = await promptAccountName('Gmail');
   const id = crypto.randomUUID();
@@ -146,25 +128,13 @@ async function setupGmail(): Promise<void> {
 
 async function setupOutlook(): Promise<void> {
   console.log('\n--- Outlook Setup ---');
-  console.log(
-    'Note: You need your own Azure AD app registration.\n' +
-    'Create one at https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps\n'
-  );
-
-  const { clientId } = await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'clientId',
-      message: 'Azure Application (client) ID:',
-      validate: (v: string) => v.trim().length > 0 || 'Client ID is required',
-    },
-  ]);
+  console.log('A browser window will open for Microsoft authorization.\n');
 
   const server = new OAuthCallbackServer();
   const port = await server.start();
-  const redirectUri = `http://localhost:${port}/callback`;
+  const redirectUri = `http://localhost:${port}`;
 
-  const outlookAuth = new OutlookAuth(clientId.trim());
+  const outlookAuth = new OutlookAuth(OUTLOOK_CLIENT_ID);
   const { url, codeVerifier } = await outlookAuth.getAuthUrl(redirectUri);
 
   console.log('\nOpening browser for Microsoft authorization...');
@@ -183,14 +153,11 @@ async function setupOutlook(): Promise<void> {
   console.log('Authorization code received. Exchanging for tokens...');
   const result = await outlookAuth.exchangeCode(code, codeVerifier, redirectUri);
 
-  const { email } = await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'email',
-      message: 'Outlook email address:',
-      validate: (v: string) => v.includes('@') || 'Enter a valid email address',
-    },
-  ]);
+  // Extract email from MSAL account info
+  const account = result.account as { username?: string } | undefined;
+  const email = account?.username ?? '';
+  if (!email) throw new Error('Could not retrieve email from Microsoft account');
+  console.log(`Authenticated as ${email}`);
 
   const name = await promptAccountName('Outlook');
   const id = crypto.randomUUID();
@@ -427,39 +394,54 @@ async function main(): Promise<void> {
   }
 
   // Interactive wizard
-  console.log('email-mcp Account Setup\n');
+  console.log('@marlinjai/email-mcp Account Setup\n');
 
-  const { provider } = await inquirer.prompt([
-    {
-      type: 'list',
-      name: 'provider',
-      message: 'Select provider:',
-      choices: [
-        { name: 'Gmail', value: 'gmail' },
-        { name: 'Outlook', value: 'outlook' },
-        { name: 'iCloud', value: 'icloud' },
-        { name: 'Other IMAP', value: 'imap' },
-      ],
-    },
-  ]);
+  let addMore = true;
+  while (addMore) {
+    const { provider } = await inquirer.prompt([
+      {
+        type: 'rawlist',
+        name: 'provider',
+        message: 'Select provider:',
+        choices: [
+          { name: 'Gmail', value: 'gmail' },
+          { name: 'Outlook', value: 'outlook' },
+          { name: 'iCloud', value: 'icloud' },
+          { name: 'Other IMAP', value: 'imap' },
+        ],
+      },
+    ]);
 
-  switch (provider as ProviderTypeValue) {
-    case ProviderType.Gmail:
-      await setupGmail();
-      break;
-    case ProviderType.Outlook:
-      await setupOutlook();
-      break;
-    case ProviderType.ICloud:
-      await setupICloud();
-      break;
-    case ProviderType.IMAP:
-      await setupIMAP();
-      break;
-    default:
-      console.error(`Unknown provider: ${provider}`);
-      process.exit(1);
+    switch (provider as ProviderTypeValue) {
+      case ProviderType.Gmail:
+        await setupGmail();
+        break;
+      case ProviderType.Outlook:
+        await setupOutlook();
+        break;
+      case ProviderType.ICloud:
+        await setupICloud();
+        break;
+      case ProviderType.IMAP:
+        await setupIMAP();
+        break;
+      default:
+        console.error(`Unknown provider: ${provider}`);
+        process.exit(1);
+    }
+
+    const { another } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'another',
+        message: 'Would you like to add another email account?',
+        default: false,
+      },
+    ]);
+    addMore = another;
   }
+
+  console.log('\nSetup complete! You can now use the email tools in Claude Code.');
 }
 
 main().catch((err) => {

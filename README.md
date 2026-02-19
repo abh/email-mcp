@@ -1,4 +1,4 @@
-# email-mcp
+# @marlinjai/email-mcp
 
 A unified MCP server for email access across Gmail, Outlook, iCloud, and generic IMAP providers.
 
@@ -7,6 +7,8 @@ A unified MCP server for email access across Gmail, Outlook, iCloud, and generic
 - **Multi-provider support** -- Gmail (REST API), Outlook (Microsoft Graph), iCloud (IMAP), and generic IMAP/SMTP
 - **OAuth2 authentication** -- Browser-based OAuth flows for Gmail and Outlook, with automatic token refresh
 - **Full email client** -- Search, read, send, reply, forward, organize, and manage drafts
+- **Batch operations** -- Delete, move, or mark hundreds of emails in a single call
+- **Lightweight search** -- Compact search results by default (~20KB vs ~1.4MB) with optional full body retrieval
 - **Encrypted credential storage** -- AES-256-GCM encryption at rest with machine-derived keys
 - **Provider-native APIs** -- Uses Gmail API and Microsoft Graph where available for richer features, falls back to IMAP for universal compatibility
 
@@ -15,37 +17,39 @@ A unified MCP server for email access across Gmail, Outlook, iCloud, and generic
 Install globally from npm:
 
 ```bash
-npm install -g email-mcp
+npm install -g @marlinjai/email-mcp
 ```
 
 Or run directly with npx (no install needed):
 
 ```bash
-npx email-mcp
+npx @marlinjai/email-mcp
 ```
 
 ## Quick Start
 
-1. Run the interactive setup wizard to add your first email account:
+1. Run the interactive setup wizard to add your email accounts:
 
 ```bash
-npx email-mcp setup
+npx @marlinjai/email-mcp setup
 ```
 
-2. Add the server to your Claude Code MCP configuration (`.mcp.json`):
+The wizard will walk you through provider selection and authentication. After each account, it asks if you'd like to add another — so you can set up Gmail, Outlook, and iCloud all in one go.
+
+2. Add the server to your MCP configuration (`.mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "email": {
       "command": "npx",
-      "args": ["email-mcp"]
+      "args": ["@marlinjai/email-mcp"]
     }
   }
 }
 ```
 
-3. Start using email tools in Claude Code -- search your inbox, send emails, organize messages, and more.
+3. Start using email tools in Claude Code — search your inbox, send emails, organize messages, and more.
 
 ## Provider Setup Guides
 
@@ -58,7 +62,7 @@ npx email-mcp setup
 5. Run the setup wizard:
 
 ```bash
-npx email-mcp setup
+npx @marlinjai/email-mcp setup
 # Select "Gmail" when prompted
 # A browser window will open for authorization
 # Grant the requested permissions and return to the terminal
@@ -73,7 +77,7 @@ npx email-mcp setup
 5. Run the setup wizard:
 
 ```bash
-npx email-mcp setup
+npx @marlinjai/email-mcp setup
 # Select "Outlook" when prompted
 # A browser window will open for authorization
 # Sign in and grant the requested permissions
@@ -86,7 +90,7 @@ npx email-mcp setup
 3. Run the setup wizard:
 
 ```bash
-npx email-mcp setup
+npx @marlinjai/email-mcp setup
 # Select "iCloud" when prompted
 # Enter your iCloud email address
 # Enter the app-specific password you generated
@@ -97,15 +101,15 @@ npx email-mcp setup
 Run the setup wizard with your IMAP/SMTP server details:
 
 ```bash
-npx email-mcp setup
+npx @marlinjai/email-mcp setup
 # Select "Other IMAP" when prompted
 # Enter your IMAP host, port, and credentials
 # Optionally enter SMTP host and port for sending
 ```
 
-## Available Tools
+## Available Tools (24)
 
-### Account Management
+### Account Management (4)
 
 | Tool | Description |
 |------|-------------|
@@ -114,17 +118,17 @@ npx email-mcp setup
 | `email_remove_account` | Remove an account and its stored credentials |
 | `email_test_account` | Test connection to an account |
 
-### Reading & Searching
+### Reading & Searching (5)
 
 | Tool | Description |
 |------|-------------|
 | `email_list_folders` | List all folders/labels for an account |
-| `email_search` | Search emails with filters (folder, from, to, subject, date range, read/unread, etc.) |
+| `email_search` | Search emails with filters. Returns compact results by default (`returnBody=false`). Set `returnBody=true` to include full email bodies |
 | `email_get` | Get full email content by ID (headers, body, attachment metadata) |
 | `email_get_thread` | Get an entire email thread/conversation |
 | `email_get_attachment` | Download a specific attachment by ID (returns base64 data) |
 
-### Sending & Drafts
+### Sending & Drafts (5)
 
 | Tool | Description |
 |------|-------------|
@@ -134,17 +138,27 @@ npx email-mcp setup
 | `email_draft_create` | Save a draft without sending |
 | `email_draft_list` | List all drafts |
 
-### Organization
+### Organization (7)
 
 | Tool | Description |
 |------|-------------|
-| `email_move` | Move an email to a different folder |
-| `email_delete` | Delete an email (trash or permanent) |
-| `email_mark` | Mark as read/unread, starred, or flagged |
+| `email_move` | Move an email to a different folder. Supports `sourceFolder` for IMAP/iCloud |
+| `email_delete` | Delete an email (trash or permanent). Supports `sourceFolder` for IMAP/iCloud |
+| `email_mark` | Mark as read/unread, starred, or flagged. Supports `sourceFolder` for IMAP/iCloud |
 | `email_label` | Add/remove labels (Gmail only) |
 | `email_folder_create` | Create a new folder |
 | `email_get_labels` | List all labels with counts (Gmail only) |
 | `email_get_categories` | List all categories (Outlook only) |
+
+### Batch Operations (3)
+
+| Tool | Description |
+|------|-------------|
+| `email_batch_delete` | Delete multiple emails at once (up to 1000 for Gmail, batches of 20 for Outlook, UID ranges for IMAP) |
+| `email_batch_move` | Move multiple emails to a folder in a single call |
+| `email_batch_mark` | Mark multiple emails read/unread, starred, or flagged at once |
+
+All batch tools accept a `sourceFolder` parameter for IMAP/iCloud and include a sequential fallback for maximum compatibility.
 
 ## Usage with Claude Code
 
@@ -155,7 +169,7 @@ Add the following to your `.mcp.json` file (project-level or global `~/.claude/.
   "mcpServers": {
     "email": {
       "command": "npx",
-      "args": ["email-mcp"]
+      "args": ["@marlinjai/email-mcp"]
     }
   }
 }
@@ -167,28 +181,29 @@ Once configured, you can ask Claude to interact with your email:
 - "Search for emails from alice@example.com in the last week"
 - "Reply to the latest email from Bob and thank him"
 - "Move all newsletters to the Archive folder"
+- "Delete all spam emails" (uses batch operations for speed)
 - "Draft a follow-up email to the team about the meeting"
 
 ## Development
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Build the project
-npm run build
+pnpm build
 
 # Run in development mode (watch for changes)
-npm run dev
+pnpm dev
 
 # Run tests
-npm test
+pnpm test
 
 # Run tests in watch mode
-npm run test:watch
+pnpm test:watch
 
 # Run integration tests (requires real email accounts)
-npm run test:integration
+pnpm test:integration
 ```
 
 ## License
