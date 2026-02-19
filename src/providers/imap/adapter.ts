@@ -16,6 +16,42 @@ import { ProviderType, FolderType } from '../../models/types.js';
 import { mapImapFolder, mapParsedEmail } from './mapper.js';
 import { createSmtpTransport, sendViaSmtp } from './smtp.js';
 
+/**
+ * Extracts detailed diagnostic information from ImapFlow errors.
+ * ImapFlow wraps IMAP server responses in Error objects with extra properties
+ * (responseText, responseStatus, serverResponseCode, executedCommand) that
+ * are not included in error.message ("Command failed"). This helper surfaces
+ * those details so callers get actionable error messages instead of opaque ones.
+ */
+function formatImapError(error: any, context?: string): Error {
+  const parts: string[] = [];
+  if (context) parts.push(context);
+
+  // error.responseText contains the human-readable reason from the IMAP server
+  // e.g., "Mailbox does not exist" or "[NONEXISTENT] No such mailbox"
+  const serverMsg = error.responseText || error.responseStatus;
+  if (serverMsg) {
+    parts.push(serverMsg);
+  } else {
+    parts.push(error.message || 'Unknown IMAP error');
+  }
+
+  // Include the server response code if available (e.g., NONEXISTENT, SERVERBUG)
+  if (error.serverResponseCode) {
+    parts.push(`[${error.serverResponseCode}]`);
+  }
+
+  // Flag when the server explicitly says the mailbox does not exist
+  if (error.mailboxMissing) {
+    parts.push('(mailbox does not exist on server)');
+  }
+
+  const enhanced = new Error(parts.join(' - '));
+  // Preserve the original error for debugging
+  enhanced.cause = error;
+  return enhanced;
+}
+
 export class ImapAdapter implements EmailProvider {
   readonly providerType: ProviderTypeValue = ProviderType.IMAP;
   protected client: InstanceType<typeof ImapFlow> | null = null;
@@ -93,18 +129,108 @@ export class ImapAdapter implements EmailProvider {
     return criteria;
   }
 
+  /**
+   * Resolves a folder name to the correct IMAP path.
+   * Some providers (e.g., iCloud) report folder paths differently than what
+   * users might expect. This method tries the given path first, and if SELECT
+   * fails with a mailbox-not-found error, it falls back to listing all folders
+   * and matching by name or special-use type.
+   */
+  protected async resolveFolder(folder: string): Promise<string> {
+    if (!this.client) throw new Error('Not connected');
+
+    // Common aliases: map well-known names to potential IMAP special-use types
+    const FOLDER_ALIASES: Record<string, string[]> = {
+      junk: ['Junk', 'Spam', 'Bulk Mail', 'Junk E-mail', 'Junk Email'],
+      spam: ['Junk', 'Spam', 'Bulk Mail', 'Junk E-mail', 'Junk Email'],
+      trash: ['Trash', 'Deleted Messages', 'Deleted Items', 'Bin'],
+      sent: ['Sent', 'Sent Messages', 'Sent Items', 'Sent Mail'],
+      drafts: ['Drafts', 'Draft'],
+      archive: ['Archive', 'All Mail'],
+    };
+
+    // First, try to match against known folder paths from the server
+    const folders = await this.client.list();
+    const lowerFolder = folder.toLowerCase();
+
+    // Exact path match (case-insensitive for non-INBOX folders)
+    const exactMatch = folders.find(
+      (f: any) => f.path === folder || f.path.toLowerCase() === lowerFolder
+    );
+    if (exactMatch) return exactMatch.path;
+
+    // Match by name (the last component of the path)
+    const nameMatch = folders.find(
+      (f: any) => f.name && f.name.toLowerCase() === lowerFolder
+    );
+    if (nameMatch) return nameMatch.path;
+
+    // Match by special-use flag (e.g., \Junk, \Trash, \Sent)
+    const specialUseMap: Record<string, string> = {
+      junk: '\\Junk',
+      spam: '\\Junk',
+      trash: '\\Trash',
+      sent: '\\Sent',
+      drafts: '\\Drafts',
+      archive: '\\Archive',
+      inbox: '\\Inbox',
+    };
+    const specialUseFlag = specialUseMap[lowerFolder];
+    if (specialUseFlag) {
+      const specialMatch = folders.find(
+        (f: any) => f.specialUse === specialUseFlag
+      );
+      if (specialMatch) return specialMatch.path;
+    }
+
+    // Match by alias list
+    const aliases = FOLDER_ALIASES[lowerFolder];
+    if (aliases) {
+      for (const alias of aliases) {
+        const aliasMatch = folders.find(
+          (f: any) => f.path === alias || f.name === alias ||
+            f.path.toLowerCase() === alias.toLowerCase()
+        );
+        if (aliasMatch) return aliasMatch.path;
+      }
+    }
+
+    // No match found -- return the original path and let SELECT report the error
+    return folder;
+  }
+
   async search(query: SearchQuery): Promise<Email[]> {
     if (!this.client) throw new Error('Not connected');
 
-    const folder = query.folder || 'INBOX';
-    const lock = await this.client.getMailboxLock(folder);
+    const requestedFolder = query.folder || 'INBOX';
+
+    // Resolve the folder path -- this handles provider-specific naming differences
+    // (e.g., iCloud uses "Junk" not "Spam", "Deleted Messages" not "Trash")
+    let folder: string;
+    try {
+      folder = await this.resolveFolder(requestedFolder);
+    } catch {
+      folder = requestedFolder;
+    }
+
+    let lock;
+    try {
+      lock = await this.client.getMailboxLock(folder);
+    } catch (error: any) {
+      throw formatImapError(error, `Failed to open folder "${folder}"`);
+    }
 
     try {
       const criteria = this.buildSearchCriteria(query);
-      const allUids: number[] = await this.client.search(
+      const searchResult = await this.client.search(
         Object.keys(criteria).length > 0 ? criteria : { all: true },
         { uid: true }
       );
+
+      // ImapFlow's search() returns false when the SEARCH command fails
+      // (server responds with NO/BAD) instead of throwing an error.
+      // Treat this as an empty result rather than crashing on .slice().
+      const allUids: number[] = Array.isArray(searchResult) ? searchResult : [];
 
       // Apply offset and limit to the UID list
       const offset = query.offset || 0;
@@ -163,7 +289,12 @@ export class ImapAdapter implements EmailProvider {
     if (!this.client) throw new Error('Not connected');
 
     const targetFolder = folder || 'INBOX';
-    const lock = await this.client.getMailboxLock(targetFolder);
+    let lock;
+    try {
+      lock = await this.client.getMailboxLock(targetFolder);
+    } catch (error: any) {
+      throw formatImapError(error, `Failed to open folder "${targetFolder}"`);
+    }
 
     try {
       const uid = parseInt(id, 10);
@@ -181,13 +312,19 @@ export class ImapAdapter implements EmailProvider {
   async getThread(threadId: string): Promise<Thread> {
     if (!this.client) throw new Error('Not connected');
 
-    const lock = await this.client.getMailboxLock('INBOX');
+    let lock;
+    try {
+      lock = await this.client.getMailboxLock('INBOX');
+    } catch (error: any) {
+      throw formatImapError(error, 'Failed to open folder "INBOX"');
+    }
     try {
       // Search for messages that reference this thread ID via header
-      const uids: number[] = await this.client.search(
+      const searchResult = await this.client.search(
         { or: [{ header: { 'message-id': threadId } }, { header: { references: threadId } }, { header: { 'in-reply-to': threadId } }] },
         { uid: true }
       );
+      const uids: number[] = Array.isArray(searchResult) ? searchResult : [];
 
       if (uids.length === 0) throw new Error(`Thread ${threadId} not found`);
 
@@ -226,7 +363,12 @@ export class ImapAdapter implements EmailProvider {
   async getAttachment(emailId: string, attachmentId: string): Promise<{ data: Buffer; meta: AttachmentMeta }> {
     if (!this.client) throw new Error('Not connected');
 
-    const lock = await this.client.getMailboxLock('INBOX');
+    let lock;
+    try {
+      lock = await this.client.getMailboxLock('INBOX');
+    } catch (error: any) {
+      throw formatImapError(error, 'Failed to open folder "INBOX"');
+    }
     try {
       const msg = await this.client.fetchOne(String(emailId), { source: true, uid: true }, { uid: true });
       if (!msg) throw new Error(`Email ${emailId} not found`);
@@ -292,7 +434,13 @@ export class ImapAdapter implements EmailProvider {
 
   async moveEmail(emailId: string, targetFolder: string, sourceFolder?: string): Promise<void> {
     if (!this.client) throw new Error('Not connected');
-    const lock = await this.client.getMailboxLock(sourceFolder || 'INBOX');
+    const folder = sourceFolder || 'INBOX';
+    let lock;
+    try {
+      lock = await this.client.getMailboxLock(folder);
+    } catch (error: any) {
+      throw formatImapError(error, `Failed to open folder "${folder}"`);
+    }
     try {
       await this.client.messageMove(emailId, targetFolder, { uid: true });
     } finally {
@@ -302,7 +450,13 @@ export class ImapAdapter implements EmailProvider {
 
   async deleteEmail(emailId: string, permanent?: boolean, sourceFolder?: string): Promise<void> {
     if (!this.client) throw new Error('Not connected');
-    const lock = await this.client.getMailboxLock(sourceFolder || 'INBOX');
+    const folder = sourceFolder || 'INBOX';
+    let lock;
+    try {
+      lock = await this.client.getMailboxLock(folder);
+    } catch (error: any) {
+      throw formatImapError(error, `Failed to open folder "${folder}"`);
+    }
     try {
       if (permanent) {
         await this.client.messageDelete(emailId, { uid: true });
@@ -316,7 +470,13 @@ export class ImapAdapter implements EmailProvider {
 
   async markEmail(emailId: string, flags: { read?: boolean; starred?: boolean; flagged?: boolean }, sourceFolder?: string): Promise<void> {
     if (!this.client) throw new Error('Not connected');
-    const lock = await this.client.getMailboxLock(sourceFolder || 'INBOX');
+    const folder = sourceFolder || 'INBOX';
+    let lock;
+    try {
+      lock = await this.client.getMailboxLock(folder);
+    } catch (error: any) {
+      throw formatImapError(error, `Failed to open folder "${folder}"`);
+    }
     try {
       if (flags.read === true) {
         await this.client.messageFlagsAdd(emailId, ['\\Seen'], { uid: true });
@@ -338,7 +498,12 @@ export class ImapAdapter implements EmailProvider {
     if (!this.client) throw new Error('Not connected');
     const result: BatchResult = { succeeded: [], failed: [] };
     const folder = sourceFolder || 'INBOX';
-    const lock = await this.client.getMailboxLock(folder);
+    let lock;
+    try {
+      lock = await this.client.getMailboxLock(folder);
+    } catch (error: any) {
+      throw formatImapError(error, `Failed to open folder "${folder}"`);
+    }
 
     try {
       // ImapFlow supports UID ranges as comma-separated strings
@@ -374,7 +539,12 @@ export class ImapAdapter implements EmailProvider {
     if (!this.client) throw new Error('Not connected');
     const result: BatchResult = { succeeded: [], failed: [] };
     const folder = sourceFolder || 'INBOX';
-    const lock = await this.client.getMailboxLock(folder);
+    let lock;
+    try {
+      lock = await this.client.getMailboxLock(folder);
+    } catch (error: any) {
+      throw formatImapError(error, `Failed to open folder "${folder}"`);
+    }
 
     try {
       const uidRange = emailIds.join(',');
@@ -400,7 +570,12 @@ export class ImapAdapter implements EmailProvider {
     if (!this.client) throw new Error('Not connected');
     const result: BatchResult = { succeeded: [], failed: [] };
     const folder = sourceFolder || 'INBOX';
-    const lock = await this.client.getMailboxLock(folder);
+    let lock;
+    try {
+      lock = await this.client.getMailboxLock(folder);
+    } catch (error: any) {
+      throw formatImapError(error, `Failed to open folder "${folder}"`);
+    }
 
     try {
       const uidRange = emailIds.join(',');

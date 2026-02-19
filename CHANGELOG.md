@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] - 2026-02-19
+
+### Fixed
+- IMAP folder search errors now surface actual server response instead of opaque "Command failed"
+- Search on iCloud Junk folder no longer fails silently — added folder resolution that matches by path, name, special-use flag, or common aliases
+- ImapFlow `search()` returning `false` on server rejection no longer crashes with TypeError on `.slice()`
+
+### Added
+- `formatImapError()` helper that extracts `responseText`, `serverResponseCode`, and `mailboxMissing` from ImapFlow errors
+- `resolveFolder()` method that resolves folder names against the server's folder list, handling provider-specific naming (e.g., iCloud "Deleted Messages" vs "Trash")
+- Outlook batch requests now use sequential numeric IDs to avoid case-insensitive collision on message IDs
+- Outlook API endpoints now URL-encode message IDs and folder paths
+
 ## [1.1.1] - 2026-02-19
 
 ### Changed
@@ -42,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - AES-256-GCM encrypted credential storage
 - Sequential fallback for batch operations on providers without native batch support
 
+[1.1.2]: https://github.com/marlinjai/email-mcp/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/marlinjai/email-mcp/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/marlinjai/email-mcp/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/marlinjai/email-mcp/compare/v1.0.0...v1.0.1

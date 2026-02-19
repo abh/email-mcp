@@ -94,7 +94,7 @@ export class OutlookAdapter implements EmailProvider {
   async createFolder(name: string, parentPath?: string): Promise<Folder> {
     const client = this.ensureClient();
     const endpoint = parentPath
-      ? `/me/mailFolders/${parentPath}/childFolders`
+      ? `/me/mailFolders/${encodeURIComponent(parentPath)}/childFolders`
       : '/me/mailFolders';
     const result = await client.api(endpoint).post({ displayName: name });
     return mapGraphFolder(result);
@@ -105,7 +105,7 @@ export class OutlookAdapter implements EmailProvider {
     let endpoint = '/me/messages';
     if (query.folder) {
       const folderId = await this.resolveFolder(query.folder);
-      endpoint = `/me/mailFolders/${folderId}/messages`;
+      endpoint = `/me/mailFolders/${encodeURIComponent(folderId)}/messages`;
     }
 
     const { filter, search } = buildGraphFilter(query);
@@ -137,11 +137,11 @@ export class OutlookAdapter implements EmailProvider {
 
   async getEmail(id: string): Promise<Email> {
     const client = this.ensureClient();
-    const message = await client.api(`/me/messages/${id}`).get();
+    const message = await client.api(`/me/messages/${encodeURIComponent(id)}`).get();
     const email = mapGraphMessage(message, this.accountId);
 
     if (message.hasAttachments) {
-      const attachments = await client.api(`/me/messages/${id}/attachments`).get();
+      const attachments = await client.api(`/me/messages/${encodeURIComponent(id)}/attachments`).get();
       email.attachments = (attachments.value || []).map(mapGraphAttachment);
     }
 
@@ -184,7 +184,7 @@ export class OutlookAdapter implements EmailProvider {
   ): Promise<{ data: Buffer; meta: AttachmentMeta }> {
     const client = this.ensureClient();
     const attachment = await client
-      .api(`/me/messages/${emailId}/attachments/${attachmentId}`)
+      .api(`/me/messages/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(attachmentId)}`)
       .get();
 
     return {
@@ -240,7 +240,7 @@ export class OutlookAdapter implements EmailProvider {
   async moveEmail(emailId: string, targetFolder: string, _sourceFolder?: string): Promise<void> {
     const client = this.ensureClient();
     const destinationId = await this.resolveFolder(targetFolder);
-    await client.api(`/me/messages/${emailId}/move`).post({
+    await client.api(`/me/messages/${encodeURIComponent(emailId)}/move`).post({
       destinationId,
     });
   }
@@ -248,9 +248,9 @@ export class OutlookAdapter implements EmailProvider {
   async deleteEmail(emailId: string, permanent?: boolean, _sourceFolder?: string): Promise<void> {
     const client = this.ensureClient();
     if (permanent) {
-      await client.api(`/me/messages/${emailId}`).delete();
+      await client.api(`/me/messages/${encodeURIComponent(emailId)}`).delete();
     } else {
-      await client.api(`/me/messages/${emailId}/move`).post({
+      await client.api(`/me/messages/${encodeURIComponent(emailId)}/move`).post({
         destinationId: 'deleteditems',
       });
     }
@@ -274,7 +274,7 @@ export class OutlookAdapter implements EmailProvider {
       patch.flag = { flagStatus: flags.flagged ? 'flagged' : 'notFlagged' };
     }
 
-    await client.api(`/me/messages/${emailId}`).patch(patch);
+    await client.api(`/me/messages/${encodeURIComponent(emailId)}`).patch(patch);
   }
 
   private async executeBatch(requests: Array<{ id: string; method: string; url: string; body?: any }>): Promise<Map<string, { status: number; body?: any }>> {
@@ -284,18 +284,31 @@ export class OutlookAdapter implements EmailProvider {
     // Graph API allows max 20 requests per batch
     for (let i = 0; i < requests.length; i += 20) {
       const chunk = requests.slice(i, i + 20);
+
+      // Use sequential numeric IDs for the batch request `id` field instead of
+      // raw message IDs. The batch `id` is a correlation value only — it is
+      // case-INsensitive and must be unique within the batch. Outlook message
+      // IDs are long base64 strings that can collide under case-insensitive
+      // comparison, causing "Id is malformed" or duplicate-id errors.
+      const indexToId = new Map<string, string>();
       const batchPayload = {
-        requests: chunk.map((req) => ({
-          id: req.id,
-          method: req.method,
-          url: req.url,
-          ...(req.body ? { body: req.body, headers: { 'Content-Type': 'application/json' } } : {}),
-        })),
+        requests: chunk.map((req, idx) => {
+          const batchId = String(idx);
+          indexToId.set(batchId, req.id);
+          return {
+            id: batchId,
+            method: req.method,
+            url: req.url,
+            ...(req.body ? { body: req.body, headers: { 'Content-Type': 'application/json' } } : {}),
+          };
+        }),
       };
 
       const response = await client.api('/$batch').post(batchPayload);
       for (const resp of response.responses || []) {
-        results.set(resp.id, { status: resp.status, body: resp.body });
+        // Map the sequential batch id back to the original email id
+        const originalId = indexToId.get(resp.id) ?? resp.id;
+        results.set(originalId, { status: resp.status, body: resp.body });
       }
     }
 
@@ -309,7 +322,7 @@ export class OutlookAdapter implements EmailProvider {
       const requests = emailIds.map((id) => ({
         id,
         method: 'DELETE',
-        url: `/me/messages/${id}`,
+        url: `/me/messages/${encodeURIComponent(id)}`,
       }));
       const responses = await this.executeBatch(requests);
       for (const [id, resp] of responses) {
@@ -323,7 +336,7 @@ export class OutlookAdapter implements EmailProvider {
       const requests = emailIds.map((id) => ({
         id,
         method: 'POST',
-        url: `/me/messages/${id}/move`,
+        url: `/me/messages/${encodeURIComponent(id)}/move`,
         body: { destinationId: 'deleteditems' },
       }));
       const responses = await this.executeBatch(requests);
@@ -346,7 +359,7 @@ export class OutlookAdapter implements EmailProvider {
     const requests = emailIds.map((id) => ({
       id,
       method: 'POST',
-      url: `/me/messages/${id}/move`,
+      url: `/me/messages/${encodeURIComponent(id)}/move`,
       body: { destinationId },
     }));
 
@@ -378,7 +391,7 @@ export class OutlookAdapter implements EmailProvider {
     const requests = emailIds.map((id) => ({
       id,
       method: 'PATCH',
-      url: `/me/messages/${id}`,
+      url: `/me/messages/${encodeURIComponent(id)}`,
       body: patch,
     }));
 
