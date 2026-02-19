@@ -3,3 +3,6 @@ dist/
 *.tsbuildinfo
 .env
 credentials.enc
+.mcp.json
+.mcpregistry_*
+config/

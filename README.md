@@ -55,33 +55,29 @@ The wizard will walk you through provider selection and authentication. After ea
 
 ### Gmail
 
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (or select an existing one).
-3. Enable the **Gmail API** under APIs & Services.
-4. Go to **Credentials** and create an **OAuth 2.0 Client ID** (Desktop application type).
-5. Run the setup wizard:
+No configuration needed — the setup wizard handles everything using built-in OAuth credentials (PKCE):
 
 ```bash
 npx @marlinjai/email-mcp setup
 # Select "Gmail" when prompted
-# A browser window will open for authorization
+# A browser window opens for Google authorization
 # Grant the requested permissions and return to the terminal
 ```
 
+> **Note:** If you prefer to use your own OAuth app, create a Desktop OAuth 2.0 Client in the [Google Cloud Console](https://console.cloud.google.com/) with the Gmail API enabled.
+
 ### Outlook
 
-1. Go to the [Azure Portal](https://portal.azure.com/) and navigate to **App registrations**.
-2. Register a new application (select "Personal Microsoft accounts" for consumer Outlook).
-3. Under **Authentication**, add a redirect URI for `http://localhost`.
-4. Under **API permissions**, add `Mail.ReadWrite`, `Mail.Send`, and `offline_access`.
-5. Run the setup wizard:
+No configuration needed — the setup wizard handles everything using built-in OAuth credentials (PKCE):
 
 ```bash
 npx @marlinjai/email-mcp setup
 # Select "Outlook" when prompted
-# A browser window will open for authorization
+# A browser window opens for Microsoft authorization
 # Sign in and grant the requested permissions
 ```
+
+> **Note:** If you prefer to use your own OAuth app, register one in the [Azure Portal](https://portal.azure.com/) with `Mail.ReadWrite`, `Mail.Send`, and `offline_access` permissions.
 
 ### iCloud
 

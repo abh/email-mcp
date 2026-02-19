@@ -39,8 +39,8 @@ export class GmailAuth {
     return { url, codeVerifier };
   }
 
-  async exchangeCode(code: string, _codeVerifier: string): Promise<OAuthTokens> {
-    const { tokens } = await this.oauth2Client.getToken(code);
+  async exchangeCode(code: string, codeVerifier: string): Promise<OAuthTokens> {
+    const { tokens } = await this.oauth2Client.getToken({ code, codeVerifier });
     return {
       access_token: tokens.access_token || '',
       refresh_token: tokens.refresh_token || '',

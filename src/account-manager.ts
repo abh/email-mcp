@@ -8,6 +8,7 @@ import { ImapAdapter } from './providers/imap/adapter.js';
 import type { EmailProvider } from './providers/provider.js';
 import type { Account, AccountCredentials, ProviderTypeValue } from './models/types.js';
 import { ProviderType } from './models/types.js';
+import { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, OUTLOOK_CLIENT_ID } from './oauth-config.js';
 
 function createProvider(provider: ProviderTypeValue): EmailProvider {
   switch (provider) {
@@ -117,12 +118,12 @@ export class AccountManager {
 
     try {
       if (creds.provider === ProviderType.Gmail) {
-        const auth = new GmailAuth('', '');
+        const auth = new GmailAuth(GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET);
         const newTokens = await auth.refreshAccessToken(creds.oauth.refresh_token);
         creds.oauth = newTokens;
         await this.store.save(creds);
       } else if (creds.provider === ProviderType.Outlook) {
-        const outlookAuth = new OutlookAuth('');
+        const outlookAuth = new OutlookAuth(OUTLOOK_CLIENT_ID);
         const result = await outlookAuth.refreshToken(creds.oauth.refresh_token);
         creds.oauth = {
           access_token: result.accessToken,

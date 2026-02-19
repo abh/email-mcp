@@ -34,7 +34,7 @@ export class OAuthCallbackServer {
       this.server = http.createServer((req, res) => {
         const url = new URL(req.url || '/', `http://localhost`);
 
-        if (url.pathname === '/callback') {
+        if (url.pathname === '/callback' || url.pathname === '/') {
           const code = url.searchParams.get('code');
           const error = url.searchParams.get('error');
 
