@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AccountManager } from '../account-manager.js';
+import type { BatchResult } from '../models/types.js';
 
 function jsonResult(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data) }] };
@@ -15,11 +16,12 @@ export function registerOrganizingTools(server: McpServer, accountManager: Accou
       accountId: z.string(),
       emailId: z.string(),
       targetFolder: z.string(),
+      sourceFolder: z.string().optional().describe('Source folder (required for IMAP/iCloud when email is not in INBOX)'),
     },
     async (args) => {
       try {
         const provider = await accountManager.getProvider(args.accountId);
-        await provider.moveEmail(args.emailId, args.targetFolder);
+        await provider.moveEmail(args.emailId, args.targetFolder, args.sourceFolder);
         return jsonResult({ success: true });
       } catch (error: any) {
         return jsonResult({ success: false, error: error.message });
@@ -35,11 +37,12 @@ export function registerOrganizingTools(server: McpServer, accountManager: Accou
       accountId: z.string(),
       emailId: z.string(),
       permanent: z.boolean().optional(),
+      sourceFolder: z.string().optional().describe('Source folder (required for IMAP/iCloud when email is not in INBOX)'),
     },
     async (args) => {
       try {
         const provider = await accountManager.getProvider(args.accountId);
-        await provider.deleteEmail(args.emailId, args.permanent);
+        await provider.deleteEmail(args.emailId, args.permanent, args.sourceFolder);
         return jsonResult({ success: true });
       } catch (error: any) {
         return jsonResult({ success: false, error: error.message });
@@ -57,6 +60,7 @@ export function registerOrganizingTools(server: McpServer, accountManager: Accou
       read: z.boolean().optional(),
       starred: z.boolean().optional(),
       flagged: z.boolean().optional(),
+      sourceFolder: z.string().optional().describe('Source folder (required for IMAP/iCloud when email is not in INBOX)'),
     },
     async (args) => {
       try {
@@ -65,8 +69,122 @@ export function registerOrganizingTools(server: McpServer, accountManager: Accou
         if (args.read !== undefined) flags.read = args.read;
         if (args.starred !== undefined) flags.starred = args.starred;
         if (args.flagged !== undefined) flags.flagged = args.flagged;
-        await provider.markEmail(args.emailId, flags);
+        await provider.markEmail(args.emailId, flags, args.sourceFolder);
         return jsonResult({ success: true });
+      } catch (error: any) {
+        return jsonResult({ success: false, error: error.message });
+      }
+    },
+  );
+
+  // --- email_batch_delete ---
+  server.tool(
+    'email_batch_delete',
+    'Delete multiple emails at once. Much faster than individual deletes.',
+    {
+      accountId: z.string(),
+      emailIds: z.array(z.string()).min(1).describe('Array of email IDs to delete'),
+      permanent: z.boolean().optional().describe('Permanently delete instead of moving to trash'),
+      sourceFolder: z.string().optional().describe('Source folder (required for IMAP/iCloud when emails are not in INBOX)'),
+    },
+    async (args) => {
+      try {
+        const provider = await accountManager.getProvider(args.accountId);
+
+        if (provider.batchDelete) {
+          const result = await provider.batchDelete(args.emailIds, args.permanent, args.sourceFolder);
+          return jsonResult({ success: true, ...result });
+        }
+
+        // Sequential fallback for providers without native batch support
+        const result: BatchResult = { succeeded: [], failed: [] };
+        for (const id of args.emailIds) {
+          try {
+            await provider.deleteEmail(id, args.permanent, args.sourceFolder);
+            result.succeeded.push(id);
+          } catch (e: any) {
+            result.failed.push({ id, error: e.message });
+          }
+        }
+        return jsonResult({ success: true, ...result });
+      } catch (error: any) {
+        return jsonResult({ success: false, error: error.message });
+      }
+    },
+  );
+
+  // --- email_batch_move ---
+  server.tool(
+    'email_batch_move',
+    'Move multiple emails to a folder at once. Much faster than individual moves.',
+    {
+      accountId: z.string(),
+      emailIds: z.array(z.string()).min(1).describe('Array of email IDs to move'),
+      targetFolder: z.string().describe('Destination folder name or ID'),
+      sourceFolder: z.string().optional().describe('Source folder (required for IMAP/iCloud when emails are not in INBOX)'),
+    },
+    async (args) => {
+      try {
+        const provider = await accountManager.getProvider(args.accountId);
+
+        if (provider.batchMove) {
+          const result = await provider.batchMove(args.emailIds, args.targetFolder, args.sourceFolder);
+          return jsonResult({ success: true, ...result });
+        }
+
+        // Sequential fallback
+        const result: BatchResult = { succeeded: [], failed: [] };
+        for (const id of args.emailIds) {
+          try {
+            await provider.moveEmail(id, args.targetFolder, args.sourceFolder);
+            result.succeeded.push(id);
+          } catch (e: any) {
+            result.failed.push({ id, error: e.message });
+          }
+        }
+        return jsonResult({ success: true, ...result });
+      } catch (error: any) {
+        return jsonResult({ success: false, error: error.message });
+      }
+    },
+  );
+
+  // --- email_batch_mark ---
+  server.tool(
+    'email_batch_mark',
+    'Mark multiple emails at once (read/unread, starred, flagged). Much faster than individual marks.',
+    {
+      accountId: z.string(),
+      emailIds: z.array(z.string()).min(1).describe('Array of email IDs to mark'),
+      read: z.boolean().optional(),
+      starred: z.boolean().optional(),
+      flagged: z.boolean().optional(),
+      sourceFolder: z.string().optional().describe('Source folder (required for IMAP/iCloud when emails are not in INBOX)'),
+    },
+    async (args) => {
+      try {
+        const provider = await accountManager.getProvider(args.accountId);
+        const flags: { read?: boolean; starred?: boolean; flagged?: boolean } = {};
+        if (args.read !== undefined) flags.read = args.read;
+        if (args.starred !== undefined) flags.starred = args.starred;
+        if (args.flagged !== undefined) flags.flagged = args.flagged;
+
+        if (provider.batchMark) {
+          const result = await provider.batchMark(args.emailIds, flags, args.sourceFolder);
+          return jsonResult({ success: true, ...result });
+        }
+
+        // Sequential fallback
+        const result: BatchResult = { succeeded: [], failed: [] };
+        for (const id of args.emailIds) {
+          try {
+            await provider.markEmail(id, flags, args.sourceFolder);
+            result.succeeded.push(id);
+          } catch (e: any) {
+            result.failed.push({ id, error: e.message });
+          }
+        }
+        return jsonResult({ success: true, ...result });
       } catch (error: any) {
         return jsonResult({ success: false, error: error.message });
       }

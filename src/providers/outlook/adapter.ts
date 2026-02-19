@@ -8,15 +8,17 @@ import type {
   AttachmentMeta,
   AccountCredentials,
   ProviderTypeValue,
+  BatchResult,
 } from '../../models/types.js';
 import { ProviderType } from '../../models/types.js';
-import { mapGraphFolder, mapGraphMessage, mapGraphAttachment, buildGraphFilter } from './mapper.js';
+import { mapGraphFolder, mapGraphMessage, mapGraphAttachment, buildGraphFilter, resolveWellKnownFolder } from './mapper.js';
 
 export class OutlookAdapter implements EmailProvider {
   readonly providerType: ProviderTypeValue = ProviderType.Outlook;
   private client: InstanceType<typeof Client> | null = null;
   private accountId: string = '';
   private accessToken: string = '';
+  private folderIdCache: Map<string, string> = new Map();
 
   async connect(credentials: AccountCredentials): Promise<void> {
     if (!credentials.oauth) {
@@ -51,6 +53,38 @@ export class OutlookAdapter implements EmailProvider {
     return this.client;
   }
 
+  /**
+   * Resolves a folder name/display name/ID to a valid Graph API folder reference.
+   * Handles well-known names, localized display names, and raw folder IDs.
+   */
+  async resolveFolder(nameOrId: string): Promise<string> {
+    // Check well-known name mappings (handles localized display names)
+    const wellKnown = resolveWellKnownFolder(nameOrId);
+    if (wellKnown) return wellKnown;
+
+    // Check cache
+    const cached = this.folderIdCache.get(nameOrId.toLowerCase());
+    if (cached) return cached;
+
+    // Looks like a raw folder ID (long base64 string) — use as-is
+    if (nameOrId.length > 40) return nameOrId;
+
+    // Fall back to listing folders and matching by display name
+    const client = this.ensureClient();
+    const response = await client.api('/me/mailFolders').get();
+    const folders = response.value || [];
+    for (const folder of folders) {
+      // Cache all folders while we're at it
+      this.folderIdCache.set(folder.displayName.toLowerCase(), folder.id);
+      if (folder.displayName.toLowerCase() === nameOrId.toLowerCase()) {
+        return folder.id;
+      }
+    }
+
+    // Nothing matched — return original value and let Graph API error naturally
+    return nameOrId;
+  }
+
   async listFolders(): Promise<Folder[]> {
     const client = this.ensureClient();
     const response = await client.api('/me/mailFolders').get();
@@ -68,12 +102,19 @@ export class OutlookAdapter implements EmailProvider {
 
   async search(query: SearchQuery): Promise<Email[]> {
     const client = this.ensureClient();
-    const endpoint = query.folder
-      ? `/me/mailFolders/${query.folder}/messages`
-      : '/me/messages';
+    let endpoint = '/me/messages';
+    if (query.folder) {
+      const folderId = await this.resolveFolder(query.folder);
+      endpoint = `/me/mailFolders/${folderId}/messages`;
+    }
 
     const { filter, search } = buildGraphFilter(query);
     let request = client.api(endpoint);
+
+    // When body is not needed, use $select to exclude it — dramatically reduces payload
+    if (!query.returnBody) {
+      request = request.select('id,conversationId,parentFolderId,from,toRecipients,ccRecipients,bccRecipients,subject,receivedDateTime,bodyPreview,hasAttachments,isRead,importance,flag,isDraft,categories');
+    }
 
     if (filter) {
       request = request.filter(filter);
@@ -196,14 +237,15 @@ export class OutlookAdapter implements EmailProvider {
     return (response.value || []).map((msg: any) => mapGraphMessage(msg, this.accountId));
   }
 
-  async moveEmail(emailId: string, targetFolder: string): Promise<void> {
+  async moveEmail(emailId: string, targetFolder: string, _sourceFolder?: string): Promise<void> {
     const client = this.ensureClient();
+    const destinationId = await this.resolveFolder(targetFolder);
     await client.api(`/me/messages/${emailId}/move`).post({
-      destinationId: targetFolder,
+      destinationId,
     });
   }
 
-  async deleteEmail(emailId: string, permanent?: boolean): Promise<void> {
+  async deleteEmail(emailId: string, permanent?: boolean, _sourceFolder?: string): Promise<void> {
     const client = this.ensureClient();
     if (permanent) {
       await client.api(`/me/messages/${emailId}`).delete();
@@ -216,7 +258,8 @@ export class OutlookAdapter implements EmailProvider {
 
   async markEmail(
     emailId: string,
-    flags: { read?: boolean; starred?: boolean; flagged?: boolean }
+    flags: { read?: boolean; starred?: boolean; flagged?: boolean },
+    _sourceFolder?: string,
   ): Promise<void> {
     const client = this.ensureClient();
     const patch: any = {};
@@ -232,6 +275,123 @@ export class OutlookAdapter implements EmailProvider {
     }
 
     await client.api(`/me/messages/${emailId}`).patch(patch);
+  }
+
+  private async executeBatch(requests: Array<{ id: string; method: string; url: string; body?: any }>): Promise<Map<string, { status: number; body?: any }>> {
+    const client = this.ensureClient();
+    const results = new Map<string, { status: number; body?: any }>();
+
+    // Graph API allows max 20 requests per batch
+    for (let i = 0; i < requests.length; i += 20) {
+      const chunk = requests.slice(i, i + 20);
+      const batchPayload = {
+        requests: chunk.map((req) => ({
+          id: req.id,
+          method: req.method,
+          url: req.url,
+          ...(req.body ? { body: req.body, headers: { 'Content-Type': 'application/json' } } : {}),
+        })),
+      };
+
+      const response = await client.api('/$batch').post(batchPayload);
+      for (const resp of response.responses || []) {
+        results.set(resp.id, { status: resp.status, body: resp.body });
+      }
+    }
+
+    return results;
+  }
+
+  async batchDelete(emailIds: string[], permanent?: boolean, _sourceFolder?: string): Promise<BatchResult> {
+    const result: BatchResult = { succeeded: [], failed: [] };
+
+    if (permanent) {
+      const requests = emailIds.map((id) => ({
+        id,
+        method: 'DELETE',
+        url: `/me/messages/${id}`,
+      }));
+      const responses = await this.executeBatch(requests);
+      for (const [id, resp] of responses) {
+        if (resp.status >= 200 && resp.status < 300) {
+          result.succeeded.push(id);
+        } else {
+          result.failed.push({ id, error: resp.body?.error?.message || `HTTP ${resp.status}` });
+        }
+      }
+    } else {
+      const requests = emailIds.map((id) => ({
+        id,
+        method: 'POST',
+        url: `/me/messages/${id}/move`,
+        body: { destinationId: 'deleteditems' },
+      }));
+      const responses = await this.executeBatch(requests);
+      for (const [id, resp] of responses) {
+        if (resp.status >= 200 && resp.status < 300) {
+          result.succeeded.push(id);
+        } else {
+          result.failed.push({ id, error: resp.body?.error?.message || `HTTP ${resp.status}` });
+        }
+      }
+    }
+
+    return result;
+  }
+
+  async batchMove(emailIds: string[], targetFolder: string, _sourceFolder?: string): Promise<BatchResult> {
+    const result: BatchResult = { succeeded: [], failed: [] };
+    const destinationId = await this.resolveFolder(targetFolder);
+
+    const requests = emailIds.map((id) => ({
+      id,
+      method: 'POST',
+      url: `/me/messages/${id}/move`,
+      body: { destinationId },
+    }));
+
+    const responses = await this.executeBatch(requests);
+    for (const [id, resp] of responses) {
+      if (resp.status >= 200 && resp.status < 300) {
+        result.succeeded.push(id);
+      } else {
+        result.failed.push({ id, error: resp.body?.error?.message || `HTTP ${resp.status}` });
+      }
+    }
+
+    return result;
+  }
+
+  async batchMark(emailIds: string[], flags: { read?: boolean; starred?: boolean; flagged?: boolean }, _sourceFolder?: string): Promise<BatchResult> {
+    const result: BatchResult = { succeeded: [], failed: [] };
+    const patch: any = {};
+
+    if (flags.read !== undefined) patch.isRead = flags.read;
+    if (flags.starred !== undefined) patch.importance = flags.starred ? 'high' : 'normal';
+    if (flags.flagged !== undefined) patch.flag = { flagStatus: flags.flagged ? 'flagged' : 'notFlagged' };
+
+    if (Object.keys(patch).length === 0) {
+      result.succeeded = [...emailIds];
+      return result;
+    }
+
+    const requests = emailIds.map((id) => ({
+      id,
+      method: 'PATCH',
+      url: `/me/messages/${id}`,
+      body: patch,
+    }));
+
+    const responses = await this.executeBatch(requests);
+    for (const [id, resp] of responses) {
+      if (resp.status >= 200 && resp.status < 300) {
+        result.succeeded.push(id);
+      } else {
+        result.failed.push({ id, error: resp.body?.error?.message || `HTTP ${resp.status}` });
+      }
+    }
+
+    return result;
   }
 
   async getCategories(): Promise<string[]> {

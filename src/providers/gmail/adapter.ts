@@ -10,6 +10,7 @@ import type {
   AttachmentMeta,
   AccountCredentials,
   ProviderTypeValue,
+  BatchResult,
 } from '../../models/types.js';
 import { ProviderType } from '../../models/types.js';
 import { mapGmailLabel, mapGmailMessage, buildGmailQuery } from './mapper.js';
@@ -228,7 +229,7 @@ export class GmailAdapter implements EmailProvider {
     return emails;
   }
 
-  async moveEmail(emailId: string, targetFolder: string): Promise<void> {
+  async moveEmail(emailId: string, targetFolder: string, _sourceFolder?: string): Promise<void> {
     const gmail = this.ensureConnected();
 
     // Get current labels to determine source
@@ -251,7 +252,7 @@ export class GmailAdapter implements EmailProvider {
     });
   }
 
-  async deleteEmail(emailId: string, permanent?: boolean): Promise<void> {
+  async deleteEmail(emailId: string, permanent?: boolean, _sourceFolder?: string): Promise<void> {
     const gmail = this.ensureConnected();
 
     if (permanent) {
@@ -264,6 +265,7 @@ export class GmailAdapter implements EmailProvider {
   async markEmail(
     emailId: string,
     flags: { read?: boolean; starred?: boolean; flagged?: boolean },
+    _sourceFolder?: string,
   ): Promise<void> {
     const gmail = this.ensureConnected();
     const addLabelIds: string[] = [];
@@ -281,6 +283,126 @@ export class GmailAdapter implements EmailProvider {
         requestBody: { addLabelIds, removeLabelIds },
       });
     }
+  }
+
+  async batchDelete(emailIds: string[], permanent?: boolean, _sourceFolder?: string): Promise<BatchResult> {
+    const gmail = this.ensureConnected();
+    const result: BatchResult = { succeeded: [], failed: [] };
+
+    if (permanent) {
+      // Gmail batchDelete permanently deletes
+      try {
+        await gmail.users.messages.batchDelete({
+          userId: 'me',
+          requestBody: { ids: emailIds },
+        });
+        result.succeeded = [...emailIds];
+      } catch (error: any) {
+        // If batch fails, try individually
+        for (const id of emailIds) {
+          try {
+            await gmail.users.messages.delete({ userId: 'me', id });
+            result.succeeded.push(id);
+          } catch (e: any) {
+            result.failed.push({ id, error: e.message });
+          }
+        }
+      }
+    } else {
+      // Move to trash — no native batch, but batchModify can add TRASH label
+      try {
+        await gmail.users.messages.batchModify({
+          userId: 'me',
+          requestBody: {
+            ids: emailIds,
+            addLabelIds: ['TRASH'],
+            removeLabelIds: ['INBOX'],
+          },
+        });
+        result.succeeded = [...emailIds];
+      } catch (error: any) {
+        for (const id of emailIds) {
+          try {
+            await gmail.users.messages.trash({ userId: 'me', id });
+            result.succeeded.push(id);
+          } catch (e: any) {
+            result.failed.push({ id, error: e.message });
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  async batchMove(emailIds: string[], targetFolder: string, _sourceFolder?: string): Promise<BatchResult> {
+    const gmail = this.ensureConnected();
+    const result: BatchResult = { succeeded: [], failed: [] };
+
+    const systemFolderLabels = ['INBOX', 'SENT', 'TRASH', 'SPAM', 'DRAFT'];
+    // Determine which labels to remove (remove all system folder labels)
+    const removeLabelIds = systemFolderLabels;
+
+    try {
+      await gmail.users.messages.batchModify({
+        userId: 'me',
+        requestBody: {
+          ids: emailIds,
+          addLabelIds: [targetFolder],
+          removeLabelIds,
+        },
+      });
+      result.succeeded = [...emailIds];
+    } catch (error: any) {
+      // Fallback to individual moves
+      for (const id of emailIds) {
+        try {
+          await this.moveEmail(id, targetFolder);
+          result.succeeded.push(id);
+        } catch (e: any) {
+          result.failed.push({ id, error: e.message });
+        }
+      }
+    }
+
+    return result;
+  }
+
+  async batchMark(emailIds: string[], flags: { read?: boolean; starred?: boolean; flagged?: boolean }, _sourceFolder?: string): Promise<BatchResult> {
+    const gmail = this.ensureConnected();
+    const result: BatchResult = { succeeded: [], failed: [] };
+
+    const addLabelIds: string[] = [];
+    const removeLabelIds: string[] = [];
+
+    if (flags.read === true) removeLabelIds.push('UNREAD');
+    if (flags.read === false) addLabelIds.push('UNREAD');
+    if (flags.starred === true || flags.flagged === true) addLabelIds.push('STARRED');
+    if (flags.starred === false || flags.flagged === false) removeLabelIds.push('STARRED');
+
+    if (addLabelIds.length === 0 && removeLabelIds.length === 0) {
+      result.succeeded = [...emailIds];
+      return result;
+    }
+
+    try {
+      await gmail.users.messages.batchModify({
+        userId: 'me',
+        requestBody: { ids: emailIds, addLabelIds, removeLabelIds },
+      });
+      result.succeeded = [...emailIds];
+    } catch (error: any) {
+      for (const id of emailIds) {
+        try {
+          await this.markEmail(id, flags);
+          result.succeeded.push(id);
+        } catch (e: any) {
+          result.failed.push({ id, error: e.message });
+        }
+      }
+    }
+
+    return result;
   }
 
   async addLabels(emailId: string, labels: string[]): Promise<void> {

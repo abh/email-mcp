@@ -1,10 +1,17 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AccountManager } from '../account-manager.js';
-import type { SearchQuery } from '../models/types.js';
+import type { SearchQuery, Email } from '../models/types.js';
 
 function jsonResult(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+function stripBodies(emails: Email[]): Email[] {
+  return emails.map((email) => ({
+    ...email,
+    body: { text: undefined, html: undefined },
+  }));
 }
 
 export function registerReadingTools(server: McpServer, accountManager: AccountManager): void {
@@ -29,7 +36,7 @@ export function registerReadingTools(server: McpServer, accountManager: AccountM
   // --- email_search ---
   server.tool(
     'email_search',
-    'Search emails with filters',
+    'Search emails with filters. By default returns compact results without full body content to save context. Set returnBody=true to include full email bodies.',
     {
       accountId: z.string(),
       folder: z.string().optional(),
@@ -44,6 +51,7 @@ export function registerReadingTools(server: McpServer, accountManager: AccountM
       hasAttachment: z.boolean().optional(),
       limit: z.number().optional(),
       offset: z.number().optional(),
+      returnBody: z.boolean().optional().describe('Include full email body in results (default: false). Set to true only when you need the full content.'),
     },
     async (args) => {
       try {
@@ -62,8 +70,15 @@ export function registerReadingTools(server: McpServer, accountManager: AccountM
         if (args.hasAttachment !== undefined) query.hasAttachment = args.hasAttachment;
         if (args.limit !== undefined) query.limit = args.limit;
         if (args.offset !== undefined) query.offset = args.offset;
+        if (args.returnBody !== undefined) query.returnBody = args.returnBody;
 
-        const emails = await provider.search(query);
+        let emails = await provider.search(query);
+
+        // Strip bodies by default to reduce payload size
+        if (!args.returnBody) {
+          emails = stripBodies(emails);
+        }
+
         return jsonResult(emails);
       } catch (error: any) {
         return jsonResult({ error: error.message });

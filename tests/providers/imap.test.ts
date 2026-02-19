@@ -24,6 +24,15 @@ function createMockMessage(uid: number, opts: {
     uid,
     source: Buffer.from(`Subject: ${opts.subject || 'Test'}\r\n\r\n${opts.text || 'body'}`),
     flags: opts.flags || new Set(),
+    envelope: {
+      from: [{ name: opts.from || 'Alice', address: opts.from || 'alice@test.com' }],
+      to: [{ name: opts.to || 'Bob', address: opts.to || 'bob@test.com' }],
+      cc: [],
+      bcc: [],
+      subject: opts.subject || `Test Subject ${uid}`,
+      date: (opts.date || new Date('2026-01-15T10:00:00Z')).toISOString(),
+      messageId: `<msg-${uid}@example.com>`,
+    },
   };
 }
 
@@ -219,14 +228,14 @@ describe('ImapAdapter search and getEmail', () => {
   });
 
   it('searches messages in a folder', async () => {
-    const results = await adapter.search({ folder: 'INBOX' });
+    const results = await adapter.search({ folder: 'INBOX', returnBody: true });
     expect(results).toHaveLength(3);
     expect(results[0].accountId).toBe('test-1');
     expect(results[0].folder).toBe('INBOX');
   });
 
   it('searches with from filter', async () => {
-    const results = await adapter.search({ folder: 'INBOX', from: 'alice@test.com' });
+    const results = await adapter.search({ folder: 'INBOX', from: 'alice@test.com', returnBody: true });
     expect(results).toHaveLength(3);
     // Verify the IMAP client's search was called with the right criteria
     const client = (adapter as any).client;
@@ -236,14 +245,14 @@ describe('ImapAdapter search and getEmail', () => {
   });
 
   it('searches with unreadOnly filter', async () => {
-    await adapter.search({ folder: 'INBOX', unreadOnly: true });
+    await adapter.search({ folder: 'INBOX', unreadOnly: true, returnBody: true });
     const client = (adapter as any).client;
     const searchCriteria = client.search.mock.calls[0][0];
     expect(searchCriteria).toHaveProperty('unseen', true);
   });
 
   it('searches with date filters', async () => {
-    await adapter.search({ folder: 'INBOX', since: '2026-01-01', before: '2026-02-01' });
+    await adapter.search({ folder: 'INBOX', since: '2026-01-01', before: '2026-02-01', returnBody: true });
     const client = (adapter as any).client;
     const searchCriteria = client.search.mock.calls[0][0];
     expect(searchCriteria.since).toBeInstanceOf(Date);
@@ -251,21 +260,21 @@ describe('ImapAdapter search and getEmail', () => {
   });
 
   it('searches with subject filter', async () => {
-    await adapter.search({ folder: 'INBOX', subject: 'Test' });
+    await adapter.search({ folder: 'INBOX', subject: 'Test', returnBody: true });
     const client = (adapter as any).client;
     const searchCriteria = client.search.mock.calls[0][0];
     expect(searchCriteria).toHaveProperty('subject', 'Test');
   });
 
   it('searches with starredOnly filter', async () => {
-    await adapter.search({ folder: 'INBOX', starredOnly: true });
+    await adapter.search({ folder: 'INBOX', starredOnly: true, returnBody: true });
     const client = (adapter as any).client;
     const searchCriteria = client.search.mock.calls[0][0];
     expect(searchCriteria).toHaveProperty('flagged', true);
   });
 
   it('applies limit', async () => {
-    const results = await adapter.search({ folder: 'INBOX', limit: 2 });
+    const results = await adapter.search({ folder: 'INBOX', limit: 2, returnBody: true });
     expect(results).toHaveLength(2);
   });
 
@@ -276,7 +285,7 @@ describe('ImapAdapter search and getEmail', () => {
       createMockMessage(4, { text: 'uid-4 body' }),
       createMockMessage(5, { text: 'uid-5 body' }),
     ];
-    const results = await adapter.search({ folder: 'INBOX', offset: 2 });
+    const results = await adapter.search({ folder: 'INBOX', offset: 2, returnBody: true });
     expect(results).toHaveLength(3);
   });
 
@@ -285,12 +294,12 @@ describe('ImapAdapter search and getEmail', () => {
     mockFetchMessages = [
       createMockMessage(3, { text: 'uid-3 body' }),
     ];
-    const results = await adapter.search({ folder: 'INBOX', offset: 2, limit: 1 });
+    const results = await adapter.search({ folder: 'INBOX', offset: 2, limit: 1, returnBody: true });
     expect(results).toHaveLength(1);
   });
 
   it('defaults folder to INBOX', async () => {
-    const results = await adapter.search({});
+    const results = await adapter.search({ returnBody: true });
     expect(results).toHaveLength(3);
     const client = (adapter as any).client;
     expect(client.getMailboxLock).toHaveBeenCalledWith('INBOX');
@@ -314,7 +323,7 @@ describe('ImapAdapter search and getEmail', () => {
   });
 
   it('releases mailbox lock after search', async () => {
-    await adapter.search({ folder: 'INBOX' });
+    await adapter.search({ folder: 'INBOX', returnBody: true });
     expect(mockMailboxLockRelease).toHaveBeenCalled();
   });
 });

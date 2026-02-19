@@ -93,6 +93,7 @@ export interface SearchQuery {
   hasAttachment?: boolean;
   limit?: number;
   offset?: number;
+  returnBody?: boolean;
 }
 
 export interface Account {
@@ -140,3 +141,8 @@ export interface ProviderSuccess<T> {
 }
 
 export type ProviderResult<T> = ProviderSuccess<T> | ProviderError;
+
+export interface BatchResult {
+  succeeded: string[];
+  failed: Array<{ id: string; error: string }>;
+}

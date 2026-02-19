@@ -10,6 +10,57 @@ const WELL_KNOWN_FOLDER_MAP: Record<string, FolderTypeValue> = {
   archive: FolderType.Archive,
 };
 
+// Maps localized display names to Graph API well-known folder names
+const DISPLAY_NAME_TO_WELL_KNOWN: Record<string, string> = {
+  // English
+  'inbox': 'inbox',
+  'sent items': 'sentitems',
+  'sent': 'sentitems',
+  'drafts': 'drafts',
+  'deleted items': 'deleteditems',
+  'trash': 'deleteditems',
+  'junk email': 'junkemail',
+  'junk': 'junkemail',
+  'spam': 'junkemail',
+  'archive': 'archive',
+  // German
+  'posteingang': 'inbox',
+  'gesendete elemente': 'sentitems',
+  'gesendet': 'sentitems',
+  'entwürfe': 'drafts',
+  'gelöschte elemente': 'deleteditems',
+  'papierkorb': 'deleteditems',
+  'junk-e-mail': 'junkemail',
+  'archiv': 'archive',
+  // Spanish
+  'bandeja de entrada': 'inbox',
+  'elementos enviados': 'sentitems',
+  'enviados': 'sentitems',
+  'borradores': 'drafts',
+  'elementos eliminados': 'deleteditems',
+  'correo no deseado': 'junkemail',
+  'archivo': 'archive',
+  // French
+  'boîte de réception': 'inbox',
+  'éléments envoyés': 'sentitems',
+  'brouillons': 'drafts',
+  'éléments supprimés': 'deleteditems',
+  'courrier indésirable': 'junkemail',
+  'archives': 'archive',
+};
+
+/**
+ * Resolves a display name or well-known alias to a Graph API well-known folder name.
+ * Returns undefined if not a recognized name.
+ */
+export function resolveWellKnownFolder(nameOrId: string): string | undefined {
+  const lower = nameOrId.toLowerCase().trim();
+  // Check if it's already a well-known name
+  if (WELL_KNOWN_FOLDER_MAP[lower]) return lower;
+  // Check display name mappings
+  return DISPLAY_NAME_TO_WELL_KNOWN[lower];
+}
+
 export function mapGraphFolder(graphFolder: any): Folder {
   const wellKnown = graphFolder.wellKnownName?.toLowerCase();
   return {

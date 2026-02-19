@@ -10,6 +10,7 @@ import type {
   AccountCredentials,
   ProviderTypeValue,
   PasswordCredentials,
+  BatchResult,
 } from '../../models/types.js';
 import { ProviderType, FolderType } from '../../models/types.js';
 import { mapImapFolder, mapParsedEmail } from './mapper.js';
@@ -114,10 +115,42 @@ export class ImapAdapter implements EmailProvider {
       if (slicedUids.length === 0) return [];
 
       const emails: Email[] = [];
-      for await (const msg of this.client.fetch(slicedUids, { source: true, uid: true, flags: true })) {
-        const parsed = await simpleParser(msg.source);
-        (parsed as any).flags = msg.flags;
-        emails.push(mapParsedEmail(parsed, folder, this.accountId, msg.uid));
+
+      if (query.returnBody) {
+        // Full fetch with body parsing
+        for await (const msg of this.client.fetch(slicedUids, { source: true, uid: true, flags: true })) {
+          const parsed = await simpleParser(msg.source);
+          (parsed as any).flags = msg.flags;
+          emails.push(mapParsedEmail(parsed, folder, this.accountId, msg.uid));
+        }
+      } else {
+        // Lightweight fetch: headers + flags only, skip expensive body parsing
+        for await (const msg of this.client.fetch(slicedUids, {
+          envelope: true, uid: true, flags: true, bodyStructure: true,
+        })) {
+          const env = msg.envelope;
+          emails.push({
+            id: String(msg.uid),
+            accountId: this.accountId,
+            threadId: env.messageId || undefined,
+            folder,
+            from: env.from?.[0] ? { name: env.from[0].name || undefined, email: env.from[0].address || '' } : { email: '' },
+            to: (env.to || []).map((a: any) => ({ name: a.name || undefined, email: a.address || '' })),
+            cc: env.cc?.length ? env.cc.map((a: any) => ({ name: a.name || undefined, email: a.address || '' })) : undefined,
+            bcc: env.bcc?.length ? env.bcc.map((a: any) => ({ name: a.name || undefined, email: a.address || '' })) : undefined,
+            subject: env.subject || '(no subject)',
+            date: env.date ? new Date(env.date).toISOString() : new Date().toISOString(),
+            body: { text: undefined, html: undefined },
+            snippet: env.subject || '',
+            attachments: [],
+            flags: {
+              read: msg.flags?.has('\\Seen') ?? false,
+              starred: msg.flags?.has('\\Flagged') ?? false,
+              flagged: msg.flags?.has('\\Flagged') ?? false,
+              draft: msg.flags?.has('\\Draft') ?? false,
+            },
+          });
+        }
       }
 
       return emails;
@@ -257,9 +290,9 @@ export class ImapAdapter implements EmailProvider {
     });
   }
 
-  async moveEmail(emailId: string, targetFolder: string): Promise<void> {
+  async moveEmail(emailId: string, targetFolder: string, sourceFolder?: string): Promise<void> {
     if (!this.client) throw new Error('Not connected');
-    const lock = await this.client.getMailboxLock('INBOX');
+    const lock = await this.client.getMailboxLock(sourceFolder || 'INBOX');
     try {
       await this.client.messageMove(emailId, targetFolder, { uid: true });
     } finally {
@@ -267,9 +300,9 @@ export class ImapAdapter implements EmailProvider {
     }
   }
 
-  async deleteEmail(emailId: string, permanent?: boolean): Promise<void> {
+  async deleteEmail(emailId: string, permanent?: boolean, sourceFolder?: string): Promise<void> {
     if (!this.client) throw new Error('Not connected');
-    const lock = await this.client.getMailboxLock('INBOX');
+    const lock = await this.client.getMailboxLock(sourceFolder || 'INBOX');
     try {
       if (permanent) {
         await this.client.messageDelete(emailId, { uid: true });
@@ -281,9 +314,9 @@ export class ImapAdapter implements EmailProvider {
     }
   }
 
-  async markEmail(emailId: string, flags: { read?: boolean; starred?: boolean; flagged?: boolean }): Promise<void> {
+  async markEmail(emailId: string, flags: { read?: boolean; starred?: boolean; flagged?: boolean }, sourceFolder?: string): Promise<void> {
     if (!this.client) throw new Error('Not connected');
-    const lock = await this.client.getMailboxLock('INBOX');
+    const lock = await this.client.getMailboxLock(sourceFolder || 'INBOX');
     try {
       if (flags.read === true) {
         await this.client.messageFlagsAdd(emailId, ['\\Seen'], { uid: true });
@@ -299,5 +332,105 @@ export class ImapAdapter implements EmailProvider {
     } finally {
       lock.release();
     }
+  }
+
+  async batchDelete(emailIds: string[], permanent?: boolean, sourceFolder?: string): Promise<BatchResult> {
+    if (!this.client) throw new Error('Not connected');
+    const result: BatchResult = { succeeded: [], failed: [] };
+    const folder = sourceFolder || 'INBOX';
+    const lock = await this.client.getMailboxLock(folder);
+
+    try {
+      // ImapFlow supports UID ranges as comma-separated strings
+      const uidRange = emailIds.join(',');
+      if (permanent) {
+        await this.client.messageDelete(uidRange, { uid: true });
+      } else {
+        await this.client.messageMove(uidRange, 'Trash', { uid: true });
+      }
+      result.succeeded = [...emailIds];
+    } catch (error: any) {
+      // If batch fails, try individually
+      for (const id of emailIds) {
+        try {
+          if (permanent) {
+            await this.client.messageDelete(id, { uid: true });
+          } else {
+            await this.client.messageMove(id, 'Trash', { uid: true });
+          }
+          result.succeeded.push(id);
+        } catch (e: any) {
+          result.failed.push({ id, error: e.message });
+        }
+      }
+    } finally {
+      lock.release();
+    }
+
+    return result;
+  }
+
+  async batchMove(emailIds: string[], targetFolder: string, sourceFolder?: string): Promise<BatchResult> {
+    if (!this.client) throw new Error('Not connected');
+    const result: BatchResult = { succeeded: [], failed: [] };
+    const folder = sourceFolder || 'INBOX';
+    const lock = await this.client.getMailboxLock(folder);
+
+    try {
+      const uidRange = emailIds.join(',');
+      await this.client.messageMove(uidRange, targetFolder, { uid: true });
+      result.succeeded = [...emailIds];
+    } catch (error: any) {
+      for (const id of emailIds) {
+        try {
+          await this.client.messageMove(id, targetFolder, { uid: true });
+          result.succeeded.push(id);
+        } catch (e: any) {
+          result.failed.push({ id, error: e.message });
+        }
+      }
+    } finally {
+      lock.release();
+    }
+
+    return result;
+  }
+
+  async batchMark(emailIds: string[], flags: { read?: boolean; starred?: boolean; flagged?: boolean }, sourceFolder?: string): Promise<BatchResult> {
+    if (!this.client) throw new Error('Not connected');
+    const result: BatchResult = { succeeded: [], failed: [] };
+    const folder = sourceFolder || 'INBOX';
+    const lock = await this.client.getMailboxLock(folder);
+
+    try {
+      const uidRange = emailIds.join(',');
+
+      if (flags.read === true) {
+        await this.client.messageFlagsAdd(uidRange, ['\\Seen'], { uid: true });
+      } else if (flags.read === false) {
+        await this.client.messageFlagsRemove(uidRange, ['\\Seen'], { uid: true });
+      }
+
+      if (flags.starred === true || flags.flagged === true) {
+        await this.client.messageFlagsAdd(uidRange, ['\\Flagged'], { uid: true });
+      } else if (flags.starred === false || flags.flagged === false) {
+        await this.client.messageFlagsRemove(uidRange, ['\\Flagged'], { uid: true });
+      }
+
+      result.succeeded = [...emailIds];
+    } catch (error: any) {
+      for (const id of emailIds) {
+        try {
+          await this.markEmail(id, flags, folder);
+          result.succeeded.push(id);
+        } catch (e: any) {
+          result.failed.push({ id, error: e.message });
+        }
+      }
+    } finally {
+      lock.release();
+    }
+
+    return result;
   }
 }

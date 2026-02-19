@@ -106,7 +106,7 @@ describe('Organizing tools', () => {
       });
 
       expect(accountManager.getProvider).toHaveBeenCalledWith('acct-1');
-      expect(mockProvider.moveEmail).toHaveBeenCalledWith('msg-1', 'Archive');
+      expect(mockProvider.moveEmail).toHaveBeenCalledWith('msg-1', 'Archive', undefined);
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
@@ -141,7 +141,7 @@ describe('Organizing tools', () => {
       });
 
       expect(accountManager.getProvider).toHaveBeenCalledWith('acct-1');
-      expect(mockProvider.deleteEmail).toHaveBeenCalledWith('msg-1', undefined);
+      expect(mockProvider.deleteEmail).toHaveBeenCalledWith('msg-1', undefined, undefined);
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
@@ -154,7 +154,7 @@ describe('Organizing tools', () => {
         permanent: true,
       });
 
-      expect(mockProvider.deleteEmail).toHaveBeenCalledWith('msg-1', true);
+      expect(mockProvider.deleteEmail).toHaveBeenCalledWith('msg-1', true, undefined);
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
@@ -189,7 +189,7 @@ describe('Organizing tools', () => {
       });
 
       expect(accountManager.getProvider).toHaveBeenCalledWith('acct-1');
-      expect(mockProvider.markEmail).toHaveBeenCalledWith('msg-1', { read: true });
+      expect(mockProvider.markEmail).toHaveBeenCalledWith('msg-1', { read: true }, undefined);
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
@@ -202,7 +202,7 @@ describe('Organizing tools', () => {
         starred: true,
       });
 
-      expect(mockProvider.markEmail).toHaveBeenCalledWith('msg-1', { starred: true });
+      expect(mockProvider.markEmail).toHaveBeenCalledWith('msg-1', { starred: true }, undefined);
     });
 
     it('calls provider.markEmail with flagged flag', async () => {
@@ -212,7 +212,7 @@ describe('Organizing tools', () => {
         flagged: true,
       });
 
-      expect(mockProvider.markEmail).toHaveBeenCalledWith('msg-1', { flagged: true });
+      expect(mockProvider.markEmail).toHaveBeenCalledWith('msg-1', { flagged: true }, undefined);
     });
 
     it('calls provider.markEmail with multiple flags', async () => {
@@ -228,7 +228,7 @@ describe('Organizing tools', () => {
         read: true,
         starred: true,
         flagged: false,
-      });
+      }, undefined);
     });
 
     it('returns error when provider throws', async () => {
