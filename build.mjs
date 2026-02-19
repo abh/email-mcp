@@ -1,15 +1,6 @@
 import { build, context } from 'esbuild';
 import { chmod } from 'node:fs/promises';
 
-// Inject OAuth credentials at build time from environment variables.
-// The published npm package will have these baked into the bundle.
-const define = {};
-for (const key of ['GMAIL_CLIENT_ID', 'GMAIL_CLIENT_SECRET', 'OUTLOOK_CLIENT_ID']) {
-  if (process.env[key]) {
-    define[`process.env.${key}`] = JSON.stringify(process.env[key]);
-  }
-}
-
 const shared = {
   bundle: true,
   platform: 'node',
@@ -18,7 +9,6 @@ const shared = {
   outdir: 'dist',
   outbase: 'src',
   sourcemap: true,
-  define,
   external: [
     'inquirer',
     'google-auth-library',

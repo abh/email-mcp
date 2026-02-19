@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-02-19
+
+### Changed
+- Reverted build-time credential injection — OAuth PKCE credentials are now directly in source (industry standard for public CLI clients)
+- Removed `.env.example` (no longer needed)
+
 ## [1.1.0] - 2026-02-19
 
 ### Added
@@ -36,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - AES-256-GCM encrypted credential storage
 - Sequential fallback for batch operations on providers without native batch support
 
+[1.1.1]: https://github.com/marlinjai/email-mcp/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/marlinjai/email-mcp/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/marlinjai/email-mcp/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/marlinjai/email-mcp/releases/tag/v1.0.0
