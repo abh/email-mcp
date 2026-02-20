@@ -108,6 +108,8 @@ export interface OAuthTokens {
   access_token: string;
   refresh_token: string;
   expiry: string;
+  /** MSAL home account ID for acquireTokenSilent (Outlook only) */
+  msal_home_account_id?: string;
 }
 
 export interface PasswordCredentials {

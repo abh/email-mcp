@@ -280,6 +280,8 @@ export class ImapAdapter implements EmailProvider {
       }
 
       return emails;
+    } catch (error: any) {
+      throw formatImapError(error, `Search failed in folder "${folder}"`);
     } finally {
       lock.release();
     }

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-02-20
+
+### Fixed
+- Outlook OAuth token renewal now works automatically — tokens no longer expire and require manual re-authentication
+- IMAP search errors now surface actionable server messages instead of opaque "Command failed"
+
+### Changed
+- Outlook auth uses MSAL file-based cache persistence (`~/.email-mcp/msal-cache.json`) for refresh token survival across process restarts
+- Token refresh uses `acquireTokenSilent()` instead of broken `acquireTokenByRefreshToken('')` approach
+- `refreshTokenIfNeeded()` now logs refresh failures instead of silently swallowing them
+
+### Added
+- `OutlookAuth.refreshTokenSilent()` method using MSAL's persisted cache and `acquireTokenSilent()`
+- `msal_home_account_id` field on `OAuthTokens` for identifying the cached MSAL account
+- File-based `ICachePlugin` implementation for MSAL token cache persistence
+
 ## [1.1.2] - 2026-02-19
 
 ### Fixed
@@ -55,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - AES-256-GCM encrypted credential storage
 - Sequential fallback for batch operations on providers without native batch support
 
+[1.2.0]: https://github.com/marlinjai/email-mcp/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/marlinjai/email-mcp/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/marlinjai/email-mcp/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/marlinjai/email-mcp/compare/v1.0.1...v1.1.0

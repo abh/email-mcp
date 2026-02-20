@@ -169,8 +169,9 @@ async function setupOutlook(): Promise<void> {
     email: email.trim(),
     oauth: {
       access_token: result.accessToken,
-      refresh_token: '', // MSAL manages refresh internally via cache
+      refresh_token: '', // MSAL cache handles refresh tokens via file persistence
       expiry: result.expiresOn?.toISOString() ?? '',
+      msal_home_account_id: result.homeAccountId,
     },
   };
 

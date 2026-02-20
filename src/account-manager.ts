@@ -124,16 +124,34 @@ export class AccountManager {
         await this.store.save(creds);
       } else if (creds.provider === ProviderType.Outlook) {
         const outlookAuth = new OutlookAuth(OUTLOOK_CLIENT_ID);
-        const result = await outlookAuth.refreshToken(creds.oauth.refresh_token);
-        creds.oauth = {
-          access_token: result.accessToken,
-          refresh_token: creds.oauth.refresh_token,
-          expiry: result.expiresOn?.toISOString() ?? '',
-        };
+        const homeAccountId = creds.oauth.msal_home_account_id;
+
+        if (homeAccountId) {
+          // Preferred: use MSAL's persisted cache for silent token refresh
+          const result = await outlookAuth.refreshTokenSilent(homeAccountId);
+          creds.oauth = {
+            access_token: result.accessToken,
+            refresh_token: creds.oauth.refresh_token,
+            expiry: result.expiresOn?.toISOString() ?? '',
+            msal_home_account_id: result.homeAccountId ?? homeAccountId,
+          };
+        } else if (creds.oauth.refresh_token) {
+          // Fallback: use stored refresh token directly (legacy credentials)
+          const result = await outlookAuth.refreshToken(creds.oauth.refresh_token);
+          creds.oauth = {
+            access_token: result.accessToken,
+            refresh_token: creds.oauth.refresh_token,
+            expiry: result.expiresOn?.toISOString() ?? '',
+          };
+        } else {
+          throw new Error('No MSAL account ID or refresh token — re-authenticate via setup wizard');
+        }
+
         await this.store.save(creds);
       }
-    } catch {
-      // Token refresh failed — connection will fail and surface the error
+    } catch (error: any) {
+      // Log the refresh failure so users know why connection fails
+      console.error(`Token refresh failed for ${creds.provider}: ${error.message}`);
     }
   }
 }
