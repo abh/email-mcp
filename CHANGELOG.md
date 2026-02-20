@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-02-20
+
+### Fixed
+- iCloud IMAP search no longer fails with "Invalid message number" — falls back to direct FETCH when UID SEARCH is rejected
+- Outlook "Id is malformed" errors on older messages — Graph API now uses immutable IDs (`Prefer: IdType="ImmutableId"`) that survive folder moves
+
+### Added
+- `collectUidsViaFetch()` fallback for IMAP servers that reject UID SEARCH ALL (e.g. iCloud)
+- `fetchEmails()` extracted method for reusable UID-based email fetching
+- Early return when IMAP mailbox reports zero messages (avoids unnecessary SEARCH on empty folders)
+
 ## [1.2.0] - 2026-02-20
 
 ### Fixed
@@ -71,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - AES-256-GCM encrypted credential storage
 - Sequential fallback for batch operations on providers without native batch support
 
+[1.2.1]: https://github.com/marlinjai/email-mcp/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/marlinjai/email-mcp/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/marlinjai/email-mcp/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/marlinjai/email-mcp/compare/v1.1.0...v1.1.1

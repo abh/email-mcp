@@ -27,11 +27,23 @@ export class OutlookAdapter implements EmailProvider {
     this.accountId = credentials.id;
     this.accessToken = credentials.oauth.access_token;
 
-    this.client = Client.init({
+    const client = Client.init({
       authProvider: (done) => {
         done(null, this.accessToken);
       },
     });
+
+    // Wrap the api() method to inject `Prefer: IdType="ImmutableId"` on every
+    // request.  This makes the Graph API return stable, immutable message IDs
+    // that survive moves across folders.  Without this, older Outlook.com
+    // messages can have IDs in a shorter format that the API rejects as
+    // "Id is malformed" when the message has been moved internally.
+    const originalApi = client.api.bind(client);
+    client.api = (path: string) => {
+      return originalApi(path).header('Prefer', 'IdType="ImmutableId"');
+    };
+
+    this.client = client;
   }
 
   async disconnect(): Promise<void> {

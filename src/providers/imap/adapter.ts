@@ -221,16 +221,40 @@ export class ImapAdapter implements EmailProvider {
     }
 
     try {
-      const criteria = this.buildSearchCriteria(query);
-      const searchResult = await this.client.search(
-        Object.keys(criteria).length > 0 ? criteria : { all: true },
-        { uid: true }
-      );
+      // After SELECT, the server reports how many messages exist in the mailbox.
+      // If the mailbox is empty, skip the SEARCH/FETCH entirely — some IMAP servers
+      // (notably iCloud) return errors like "Invalid message number" when searching
+      // a mailbox that reports 0 messages.
+      const mailboxExists = (this.client as any).mailbox?.exists ?? -1;
+      if (mailboxExists === 0) {
+        return [];
+      }
 
-      // ImapFlow's search() returns false when the SEARCH command fails
-      // (server responds with NO/BAD) instead of throwing an error.
-      // Treat this as an empty result rather than crashing on .slice().
-      const allUids: number[] = Array.isArray(searchResult) ? searchResult : [];
+      const criteria = this.buildSearchCriteria(query);
+      const hasCriteria = Object.keys(criteria).length > 0;
+      let allUids: number[];
+
+      try {
+        const searchResult = await this.client.search(
+          hasCriteria ? criteria : { all: true },
+          { uid: true }
+        );
+
+        // ImapFlow's search() returns false when the SEARCH command fails
+        // (server responds with NO/BAD) instead of throwing an error.
+        // Treat this as an empty result rather than crashing on .slice().
+        allUids = Array.isArray(searchResult) ? searchResult : [];
+      } catch (searchError: any) {
+        // Fallback: some IMAP servers (e.g. iCloud) fail on UID SEARCH ALL with
+        // "Invalid message number" but work fine with a direct FETCH approach.
+        // When no text-based search criteria are specified, collect UIDs via
+        // FETCH 1:* (UID FLAGS) using sequence numbers instead.
+        if (!hasCriteria) {
+          allUids = await this.collectUidsViaFetch(query);
+        } else {
+          throw searchError;
+        }
+      }
 
       // Apply offset and limit to the UID list
       const offset = query.offset || 0;
@@ -240,51 +264,74 @@ export class ImapAdapter implements EmailProvider {
 
       if (slicedUids.length === 0) return [];
 
-      const emails: Email[] = [];
-
-      if (query.returnBody) {
-        // Full fetch with body parsing
-        for await (const msg of this.client.fetch(slicedUids, { source: true, uid: true, flags: true })) {
-          const parsed = await simpleParser(msg.source);
-          (parsed as any).flags = msg.flags;
-          emails.push(mapParsedEmail(parsed, folder, this.accountId, msg.uid));
-        }
-      } else {
-        // Lightweight fetch: headers + flags only, skip expensive body parsing
-        for await (const msg of this.client.fetch(slicedUids, {
-          envelope: true, uid: true, flags: true, bodyStructure: true,
-        })) {
-          const env = msg.envelope;
-          emails.push({
-            id: String(msg.uid),
-            accountId: this.accountId,
-            threadId: env.messageId || undefined,
-            folder,
-            from: env.from?.[0] ? { name: env.from[0].name || undefined, email: env.from[0].address || '' } : { email: '' },
-            to: (env.to || []).map((a: any) => ({ name: a.name || undefined, email: a.address || '' })),
-            cc: env.cc?.length ? env.cc.map((a: any) => ({ name: a.name || undefined, email: a.address || '' })) : undefined,
-            bcc: env.bcc?.length ? env.bcc.map((a: any) => ({ name: a.name || undefined, email: a.address || '' })) : undefined,
-            subject: env.subject || '(no subject)',
-            date: env.date ? new Date(env.date).toISOString() : new Date().toISOString(),
-            body: { text: undefined, html: undefined },
-            snippet: env.subject || '',
-            attachments: [],
-            flags: {
-              read: msg.flags?.has('\\Seen') ?? false,
-              starred: msg.flags?.has('\\Flagged') ?? false,
-              flagged: msg.flags?.has('\\Flagged') ?? false,
-              draft: msg.flags?.has('\\Draft') ?? false,
-            },
-          });
-        }
-      }
-
-      return emails;
+      return await this.fetchEmails(slicedUids, folder, query.returnBody);
     } catch (error: any) {
       throw formatImapError(error, `Search failed in folder "${folder}"`);
     } finally {
       lock.release();
     }
+  }
+
+  /**
+   * Fallback UID collection when UID SEARCH fails (e.g. iCloud "Invalid message number").
+   * Uses FETCH 1:* with sequence numbers to collect UIDs directly, optionally filtering
+   * by flag-based criteria (unread, starred).
+   */
+  private async collectUidsViaFetch(query: SearchQuery): Promise<number[]> {
+    if (!this.client) return [];
+    const uids: number[] = [];
+    for await (const msg of this.client.fetch('1:*', { uid: true, flags: true })) {
+      // Apply flag-based filters that would normally be in the SEARCH criteria
+      if (query.unreadOnly && msg.flags?.has('\\Seen')) continue;
+      if (query.starredOnly && !msg.flags?.has('\\Flagged')) continue;
+      uids.push(msg.uid);
+    }
+    return uids;
+  }
+
+  /**
+   * Fetches email data for a set of UIDs, either with full body or lightweight headers.
+   */
+  private async fetchEmails(uids: number[], folder: string, returnBody?: boolean): Promise<Email[]> {
+    if (!this.client) return [];
+    const emails: Email[] = [];
+
+    if (returnBody) {
+      for await (const msg of this.client.fetch(uids, { source: true, uid: true, flags: true })) {
+        const parsed = await simpleParser(msg.source);
+        (parsed as any).flags = msg.flags;
+        emails.push(mapParsedEmail(parsed, folder, this.accountId, msg.uid));
+      }
+    } else {
+      for await (const msg of this.client.fetch(uids, {
+        envelope: true, uid: true, flags: true, bodyStructure: true,
+      })) {
+        const env = msg.envelope;
+        emails.push({
+          id: String(msg.uid),
+          accountId: this.accountId,
+          threadId: env.messageId || undefined,
+          folder,
+          from: env.from?.[0] ? { name: env.from[0].name || undefined, email: env.from[0].address || '' } : { email: '' },
+          to: (env.to || []).map((a: any) => ({ name: a.name || undefined, email: a.address || '' })),
+          cc: env.cc?.length ? env.cc.map((a: any) => ({ name: a.name || undefined, email: a.address || '' })) : undefined,
+          bcc: env.bcc?.length ? env.bcc.map((a: any) => ({ name: a.name || undefined, email: a.address || '' })) : undefined,
+          subject: env.subject || '(no subject)',
+          date: env.date ? new Date(env.date).toISOString() : new Date().toISOString(),
+          body: { text: undefined, html: undefined },
+          snippet: env.subject || '',
+          attachments: [],
+          flags: {
+            read: msg.flags?.has('\\Seen') ?? false,
+            starred: msg.flags?.has('\\Flagged') ?? false,
+            flagged: msg.flags?.has('\\Flagged') ?? false,
+            draft: msg.flags?.has('\\Draft') ?? false,
+          },
+        });
+      }
+    }
+
+    return emails;
   }
 
   async getEmail(id: string, folder?: string): Promise<Email> {
