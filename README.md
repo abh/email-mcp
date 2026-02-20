@@ -202,6 +202,13 @@ pnpm test:watch
 pnpm test:integration
 ```
 
+## Support
+
+If this project is useful to you, consider supporting its development:
+
+- [GitHub Sponsors](https://github.com/sponsors/marlinjai)
+- [Buy Me a Coffee](https://buymeacoffee.com/marlinjai)
+
 ## License
 
 MIT
