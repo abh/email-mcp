@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.3] - 2026-02-20
+
+### Fixed
+- IMAP/iCloud `deleteEmail()` and `batchDelete()` no longer hardcode `'Trash'` as move destination — now uses `resolveFolder('Trash')` to find the provider-specific trash folder (e.g., iCloud's "Deleted Messages")
+- Deleting emails already in the trash folder now uses permanent delete instead of attempting to move trash→trash
+- `sourceFolder` parameter in delete operations is now resolved through `resolveFolder()`, so passing "Trash" on iCloud correctly opens "Deleted Messages"
+
 ## [1.2.2] - 2026-02-20
 
 ### Fixed
@@ -93,6 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - AES-256-GCM encrypted credential storage
 - Sequential fallback for batch operations on providers without native batch support
 
+[1.2.3]: https://github.com/marlinjai/email-mcp/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/marlinjai/email-mcp/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/marlinjai/email-mcp/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/marlinjai/email-mcp/compare/v1.1.2...v1.2.0

@@ -499,7 +499,8 @@ export class ImapAdapter implements EmailProvider {
 
   async deleteEmail(emailId: string, permanent?: boolean, sourceFolder?: string): Promise<void> {
     if (!this.client) throw new Error('Not connected');
-    const folder = sourceFolder || 'INBOX';
+    const folder = sourceFolder ? await this.resolveFolder(sourceFolder) : 'INBOX';
+    const trashFolder = await this.resolveFolder('Trash');
     let lock;
     try {
       lock = await this.client.getMailboxLock(folder);
@@ -507,10 +508,11 @@ export class ImapAdapter implements EmailProvider {
       throw formatImapError(error, `Failed to open folder "${folder}"`);
     }
     try {
-      if (permanent) {
+      if (permanent || folder === trashFolder) {
+        // Permanently delete if requested or if already in trash
         await this.client.messageDelete(emailId, { uid: true });
       } else {
-        await this.client.messageMove(emailId, 'Trash', { uid: true });
+        await this.client.messageMove(emailId, trashFolder, { uid: true });
       }
     } finally {
       lock.release();
@@ -546,7 +548,9 @@ export class ImapAdapter implements EmailProvider {
   async batchDelete(emailIds: string[], permanent?: boolean, sourceFolder?: string): Promise<BatchResult> {
     if (!this.client) throw new Error('Not connected');
     const result: BatchResult = { succeeded: [], failed: [] };
-    const folder = sourceFolder || 'INBOX';
+    const folder = sourceFolder ? await this.resolveFolder(sourceFolder) : 'INBOX';
+    const trashFolder = await this.resolveFolder('Trash');
+    const shouldPermanentDelete = permanent || folder === trashFolder;
     let lock;
     try {
       lock = await this.client.getMailboxLock(folder);
@@ -557,20 +561,20 @@ export class ImapAdapter implements EmailProvider {
     try {
       // ImapFlow supports UID ranges as comma-separated strings
       const uidRange = emailIds.join(',');
-      if (permanent) {
+      if (shouldPermanentDelete) {
         await this.client.messageDelete(uidRange, { uid: true });
       } else {
-        await this.client.messageMove(uidRange, 'Trash', { uid: true });
+        await this.client.messageMove(uidRange, trashFolder, { uid: true });
       }
       result.succeeded = [...emailIds];
     } catch (error: any) {
       // If batch fails, try individually
       for (const id of emailIds) {
         try {
-          if (permanent) {
+          if (shouldPermanentDelete) {
             await this.client.messageDelete(id, { uid: true });
           } else {
-            await this.client.messageMove(id, 'Trash', { uid: true });
+            await this.client.messageMove(id, trashFolder, { uid: true });
           }
           result.succeeded.push(id);
         } catch (e: any) {
