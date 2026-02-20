@@ -47,7 +47,22 @@ export class AccountManager {
 
   async getProvider(accountId: string): Promise<EmailProvider> {
     const existing = this.providers.get(accountId);
-    if (existing) return existing;
+    if (existing) {
+      // Check if OAuth token has expired mid-session — reconnect if so
+      const creds = this.credentials.get(accountId);
+      if (creds?.oauth?.expiry) {
+        const expiryDate = new Date(creds.oauth.expiry);
+        const now = new Date();
+        if (!isNaN(expiryDate.getTime()) && expiryDate <= now) {
+          await this.disconnectAccount(accountId);
+          await this.connectAccount(accountId);
+          const refreshed = this.providers.get(accountId);
+          if (!refreshed) throw new Error(`Failed to reconnect account ${accountId} after token expiry`);
+          return refreshed;
+        }
+      }
+      return existing;
+    }
 
     // Auto-connect if not connected
     await this.connectAccount(accountId);
@@ -114,44 +129,49 @@ export class AccountManager {
     const expiryDate = new Date(creds.oauth.expiry);
     const fiveMinutesFromNow = new Date(Date.now() + 5 * 60 * 1000);
 
-    if (expiryDate > fiveMinutesFromNow) return;
+    // Skip refresh if token is still valid (and expiry is a valid date)
+    if (!isNaN(expiryDate.getTime()) && expiryDate > fiveMinutesFromNow) return;
 
-    try {
-      if (creds.provider === ProviderType.Gmail) {
-        const auth = new GmailAuth(GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET);
-        const newTokens = await auth.refreshAccessToken(creds.oauth.refresh_token);
-        creds.oauth = newTokens;
-        await this.store.save(creds);
-      } else if (creds.provider === ProviderType.Outlook) {
-        const outlookAuth = new OutlookAuth(OUTLOOK_CLIENT_ID);
-        const homeAccountId = creds.oauth.msal_home_account_id;
-
-        if (homeAccountId) {
-          // Preferred: use MSAL's persisted cache for silent token refresh
-          const result = await outlookAuth.refreshTokenSilent(homeAccountId);
-          creds.oauth = {
-            access_token: result.accessToken,
-            refresh_token: creds.oauth.refresh_token,
-            expiry: result.expiresOn?.toISOString() ?? '',
-            msal_home_account_id: result.homeAccountId ?? homeAccountId,
-          };
-        } else if (creds.oauth.refresh_token) {
-          // Fallback: use stored refresh token directly (legacy credentials)
-          const result = await outlookAuth.refreshToken(creds.oauth.refresh_token);
-          creds.oauth = {
-            access_token: result.accessToken,
-            refresh_token: creds.oauth.refresh_token,
-            expiry: result.expiresOn?.toISOString() ?? '',
-          };
-        } else {
-          throw new Error('No MSAL account ID or refresh token — re-authenticate via setup wizard');
-        }
-
-        await this.store.save(creds);
+    if (creds.provider === ProviderType.Gmail) {
+      const auth = new GmailAuth(GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET);
+      const newTokens = await auth.refreshAccessToken(creds.oauth.refresh_token);
+      if (!newTokens.access_token) {
+        throw new Error('Gmail token refresh returned empty access token — re-authenticate via setup wizard');
       }
-    } catch (error: any) {
-      // Log the refresh failure so users know why connection fails
-      console.error(`Token refresh failed for ${creds.provider}: ${error.message}`);
+      creds.oauth = newTokens;
+      await this.store.save(creds);
+    } else if (creds.provider === ProviderType.Outlook) {
+      const outlookAuth = new OutlookAuth(OUTLOOK_CLIENT_ID);
+      const homeAccountId = creds.oauth.msal_home_account_id;
+
+      if (homeAccountId) {
+        // Preferred: use MSAL's persisted cache for silent token refresh
+        const result = await outlookAuth.refreshTokenSilent(homeAccountId);
+        if (!result.accessToken) {
+          throw new Error('Outlook token refresh returned empty access token — re-authenticate via setup wizard');
+        }
+        creds.oauth = {
+          access_token: result.accessToken,
+          refresh_token: creds.oauth.refresh_token,
+          expiry: result.expiresOn?.toISOString() ?? '',
+          msal_home_account_id: result.homeAccountId ?? homeAccountId,
+        };
+      } else if (creds.oauth.refresh_token) {
+        // Fallback: use stored refresh token directly (legacy credentials)
+        const result = await outlookAuth.refreshToken(creds.oauth.refresh_token);
+        if (!result.accessToken) {
+          throw new Error('Outlook token refresh returned empty access token — re-authenticate via setup wizard');
+        }
+        creds.oauth = {
+          access_token: result.accessToken,
+          refresh_token: creds.oauth.refresh_token,
+          expiry: result.expiresOn?.toISOString() ?? '',
+        };
+      } else {
+        throw new Error('No MSAL account ID or refresh token — re-authenticate via setup wizard');
+      }
+
+      await this.store.save(creds);
     }
   }
 }

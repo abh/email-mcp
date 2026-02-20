@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.2] - 2026-02-20
+
+### Fixed
+- Outlook OAuth tokens now refresh automatically mid-session — `getProvider()` detects expired tokens and reconnects instead of failing with "JWT is not well formed"
+- Token refresh errors now propagate instead of being silently swallowed, giving clear error messages when re-authentication is needed
+- Invalid Date handling in token expiry check — `new Date('')` no longer bypasses the refresh logic
+
+### Added
+- Mid-session token expiry detection in `AccountManager.getProvider()` — automatically disconnects and reconnects when OAuth token expires
+- Access token validation after refresh — empty tokens from MSAL are rejected with actionable error messages
+
 ## [1.2.1] - 2026-02-20
 
 ### Fixed
@@ -82,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - AES-256-GCM encrypted credential storage
 - Sequential fallback for batch operations on providers without native batch support
 
+[1.2.2]: https://github.com/marlinjai/email-mcp/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/marlinjai/email-mcp/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/marlinjai/email-mcp/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/marlinjai/email-mcp/compare/v1.1.1...v1.1.2
