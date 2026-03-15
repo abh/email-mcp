@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.4] - 2026-03-15
+
+### Fixed
+- iCloud Junk folder search no longer fails with "Invalid message number" — uses `STATUS` command to get real message count when `mailbox.exists` reports 0 (iCloud server bug)
+- SEARCH fallback now triggers on "Invalid message number" even when text-based search criteria are present (previously only triggered with no criteria)
+- Multi-level FETCH fallback chain: `FETCH 1:*` → explicit range `FETCH 1:N` → individual sequence fetches (most resilient against iCloud quirks)
+
+### Added
+- `client.noop()` before search to refresh stale IMAP connection state
+- `client.status()` pre-check to detect real message count independently of SELECT
+- Comprehensive iCloud Junk folder fallback tests (6 new test cases)
+
 ## [1.2.3] - 2026-02-20
 
 ### Fixed

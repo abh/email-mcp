@@ -72,6 +72,8 @@ vi.mock('imapflow', () => {
     usable = true;
 
     search = vi.fn().mockImplementation(() => Promise.resolve(mockSearchResult));
+    noop = vi.fn().mockResolvedValue(undefined);
+    status = vi.fn().mockResolvedValue({ messages: -1 });
 
     getMailboxLock = vi.fn().mockImplementation(() =>
       Promise.resolve({ release: mockMailboxLockRelease })
