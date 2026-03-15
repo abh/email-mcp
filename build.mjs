@@ -29,10 +29,11 @@ if (process.argv.includes('--watch')) {
   await ctx.watch();
   console.log('Watching for changes...');
 } else {
-  // Build wizard (no shebang)
+  // Build wizard with shebang (registered as bin: email-mcp-setup)
   await build({
     ...shared,
     entryPoints: ['src/setup/wizard.ts'],
+    banner: { js: '#!/usr/bin/env node\n' },
   });
 
   // Build CLI entry with shebang
@@ -42,8 +43,9 @@ if (process.argv.includes('--watch')) {
     banner: { js: '#!/usr/bin/env node\n' },
   });
 
-  // Ensure CLI entry is executable
+  // Ensure both CLI entries are executable
   await chmod('dist/index.js', 0o755);
+  await chmod('dist/setup/wizard.js', 0o755);
 
   console.log('Build complete.');
 }

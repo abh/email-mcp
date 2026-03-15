@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.5] - 2026-03-15
+
+### Fixed
+- `email-mcp-setup` bin now includes shebang (`#!/usr/bin/env node`) and executable permissions — previously failed when invoked via `npx email-mcp-setup`
+
 ## [1.2.4] - 2026-03-15
 
 ### Fixed
