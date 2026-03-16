@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.6] - 2026-03-16
+
+### Fixed
+- Empty folder detection now handles unknown message counts — `effectiveCount <= 0` instead of `=== 0` prevents search attempts when both `STATUS` and `mailbox.exists` return unknown (-1), which caused "Invalid message number" errors on empty iCloud folders
+
 ## [1.2.5] - 2026-03-15
 
 ### Fixed

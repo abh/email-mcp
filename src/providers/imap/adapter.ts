@@ -237,7 +237,7 @@ export class ImapAdapter implements EmailProvider {
 
       // Use the higher of the two counts — if STATUS says messages exist, trust it
       const effectiveCount = Math.max(realMessageCount, mailboxExists);
-      if (effectiveCount === 0) {
+      if (effectiveCount <= 0) {
         return [];
       }
 
