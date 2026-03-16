@@ -224,49 +224,36 @@ export class ImapAdapter implements EmailProvider {
     }
 
     try {
-      // Get real message count via STATUS (works even when mailbox.exists is stale).
-      // iCloud can report EXISTS=0 after SELECT for folders that actually have messages
-      // (see ImapFlow issue #209). STATUS works independently and gives the true count.
-      let realMessageCount = -1;
+      // After getMailboxLock (which SELECTs the folder), mailbox.exists has the count.
+      // Also check via STATUS as iCloud can report stale EXISTS after SELECT (#209).
+      const mailboxExists = (this.client as any).mailbox?.exists ?? 0;
+      let statusCount = 0;
       try {
         const status = await this.client.status(folder, { messages: true });
-        realMessageCount = status.messages ?? -1;
-      } catch { /* ignore - will fall back to mailbox.exists */ }
+        statusCount = status.messages ?? 0;
+      } catch { /* ignore — STATUS can fail on some providers */ }
 
-      const mailboxExists = (this.client as any).mailbox?.exists ?? -1;
-
-      // Use the higher of the two counts — if STATUS says messages exist, trust it
-      const effectiveCount = Math.max(realMessageCount, mailboxExists);
-      if (effectiveCount <= 0) {
+      const effectiveCount = Math.max(mailboxExists, statusCount);
+      if (effectiveCount === 0) {
         return [];
       }
 
       const criteria = this.buildSearchCriteria(query);
       const hasCriteria = Object.keys(criteria).length > 0;
-      let allUids: number[];
+      let allUids: number[] = [];
 
+      // Strategy: try SEARCH first, fall back to FETCH-based UID collection.
+      // iCloud frequently fails SEARCH with "Invalid message number" on certain
+      // folders (Junk, Trash). Wrap everything so no IMAP quirk can bubble up.
       try {
         const searchResult = await this.client.search(
           hasCriteria ? criteria : { all: true },
           { uid: true }
         );
-
-        // ImapFlow's search() returns false when the SEARCH command fails
-        // (server responds with NO/BAD) instead of throwing an error.
-        // Treat this as an empty result rather than crashing on .slice().
         allUids = Array.isArray(searchResult) ? searchResult : [];
-      } catch (searchError: any) {
-        // Fallback: some IMAP servers (e.g. iCloud) fail on UID SEARCH ALL with
-        // "Invalid message number". ANY such error should trigger the FETCH fallback,
-        // regardless of whether text-based search criteria are specified.
-        const errorMsg = String(searchError?.responseText || searchError?.message || '').toLowerCase();
-        const isInvalidMessage = errorMsg.includes('invalid message');
-
-        if (isInvalidMessage || !hasCriteria) {
-          allUids = await this.collectUidsViaFetch(query);
-        } else {
-          throw searchError;
-        }
+      } catch {
+        // SEARCH failed — fall back to FETCH-based UID collection
+        allUids = await this.collectUidsViaFetch(query);
       }
 
       // Apply offset and limit to the UID list
@@ -295,42 +282,46 @@ export class ImapAdapter implements EmailProvider {
   private async collectUidsViaFetch(query: SearchQuery): Promise<number[]> {
     if (!this.client) return [];
     const uids: number[] = [];
+    const exists = (this.client as any).mailbox?.exists ?? 0;
 
-    try {
-      // Primary: FETCH 1:* with sequence numbers
-      for await (const msg of this.client.fetch('1:*', { uid: true, flags: true })) {
-        if (query.unreadOnly && msg.flags?.has('\\Seen')) continue;
-        if (query.starredOnly && !msg.flags?.has('\\Flagged')) continue;
-        uids.push(msg.uid);
+    // Helper: safely iterate a fetch stream, collecting UIDs
+    const safeFetch = async (range: string): Promise<boolean> => {
+      try {
+        const messages = await this.client!.fetchAll(range, { uid: true, flags: true });
+        for (const msg of messages) {
+          if (query.unreadOnly && msg.flags?.has('\\Seen')) continue;
+          if (query.starredOnly && !msg.flags?.has('\\Flagged')) continue;
+          uids.push(msg.uid);
+        }
+        return uids.length > 0;
+      } catch {
+        return false;
       }
-      return uids;
-    } catch {
-      // Fallback: use mailbox.exists to build explicit range
-      const exists = (this.client as any).mailbox?.exists ?? 0;
-      if (exists > 0) {
-        try {
-          for await (const msg of this.client.fetch(`1:${exists}`, { uid: true, flags: true })) {
-            if (query.unreadOnly && msg.flags?.has('\\Seen')) continue;
-            if (query.starredOnly && !msg.flags?.has('\\Flagged')) continue;
-            uids.push(msg.uid);
-          }
-          return uids;
-        } catch { /* fall through to individual fetch */ }
-      }
+    };
 
-      // Final fallback: fetch one-by-one (slowest but most resilient)
-      const count = exists > 0 ? exists : 50;
-      for (let seq = 1; seq <= count; seq++) {
-        try {
-          for await (const msg of this.client.fetch(String(seq), { uid: true, flags: true })) {
-            if (query.unreadOnly && msg.flags?.has('\\Seen')) continue;
-            if (query.starredOnly && !msg.flags?.has('\\Flagged')) continue;
-            uids.push(msg.uid);
-          }
-        } catch { /* skip — message at this sequence may not exist */ }
-      }
-      return uids;
+    // Strategy 1: FETCH 1:* (all messages by sequence)
+    if (await safeFetch('1:*')) return uids;
+    uids.length = 0;
+
+    // Strategy 2: FETCH 1:N using explicit range from mailbox.exists
+    if (exists > 0) {
+      if (await safeFetch(`1:${exists}`)) return uids;
+      uids.length = 0;
     }
+
+    // Strategy 3: individual sequence fetches (slowest but most resilient)
+    const count = exists > 0 ? exists : 50;
+    for (let seq = 1; seq <= count; seq++) {
+      try {
+        const msgs = await this.client.fetchAll(String(seq), { uid: true, flags: true });
+        for (const msg of msgs) {
+          if (query.unreadOnly && msg.flags?.has('\\Seen')) continue;
+          if (query.starredOnly && !msg.flags?.has('\\Flagged')) continue;
+          uids.push(msg.uid);
+        }
+      } catch { /* skip — message at this sequence may not exist */ }
+    }
+    return uids;
   }
 
   /**
