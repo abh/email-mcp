@@ -224,17 +224,8 @@ export class ImapAdapter implements EmailProvider {
     }
 
     try {
-      // After getMailboxLock (which SELECTs the folder), mailbox.exists has the count.
-      // Also check via STATUS as iCloud can report stale EXISTS after SELECT (#209).
       const mailboxExists = (this.client as any).mailbox?.exists ?? 0;
-      let statusCount = 0;
-      try {
-        const status = await this.client.status(folder, { messages: true });
-        statusCount = status.messages ?? 0;
-      } catch { /* ignore — STATUS can fail on some providers */ }
-
-      const effectiveCount = Math.max(mailboxExists, statusCount);
-      if (effectiveCount === 0) {
+      if (mailboxExists === 0) {
         return [];
       }
 
@@ -242,9 +233,6 @@ export class ImapAdapter implements EmailProvider {
       const hasCriteria = Object.keys(criteria).length > 0;
       let allUids: number[] = [];
 
-      // Strategy: try SEARCH first, fall back to FETCH-based UID collection.
-      // iCloud frequently fails SEARCH with "Invalid message number" on certain
-      // folders (Junk, Trash). Wrap everything so no IMAP quirk can bubble up.
       try {
         const searchResult = await this.client.search(
           hasCriteria ? criteria : { all: true },
@@ -253,10 +241,13 @@ export class ImapAdapter implements EmailProvider {
         allUids = Array.isArray(searchResult) ? searchResult : [];
       } catch {
         // SEARCH failed — fall back to FETCH-based UID collection
-        allUids = await this.collectUidsViaFetch(query);
+        try {
+          allUids = await this.collectUidsViaFetch(query);
+        } catch {
+          return [];
+        }
       }
 
-      // Apply offset and limit to the UID list
       const offset = query.offset || 0;
       const slicedUids = query.limit
         ? allUids.slice(offset, offset + query.limit)
@@ -331,16 +322,34 @@ export class ImapAdapter implements EmailProvider {
     if (!this.client) return [];
     const emails: Email[] = [];
 
-    if (returnBody) {
-      for await (const msg of this.client.fetch(uids, { source: true, uid: true, flags: true })) {
+    const fetchOpts = returnBody
+      ? { source: true, uid: true, flags: true }
+      : { envelope: true, uid: true, flags: true, bodyStructure: true };
+
+    // Try batch fetch first (fast path), fall back to individual UIDs.
+    // iCloud can reject batch UID FETCH on Junk/Trash folders.
+    // NOTE: { uid: true } in 3rd arg tells ImapFlow to treat range as UIDs, not sequence numbers.
+    const uidRange = uids.join(',');
+    let messages: any[];
+    try {
+      messages = await this.client.fetchAll(uidRange, fetchOpts, { uid: true });
+    } catch {
+      // Batch failed — fetch individually, skipping failures
+      messages = [];
+      for (const uid of uids) {
+        try {
+          const batch = await this.client.fetchAll(String(uid), fetchOpts, { uid: true });
+          messages.push(...batch);
+        } catch { /* skip this UID */ }
+      }
+    }
+
+    for (const msg of messages) {
+      if (returnBody) {
         const parsed = await simpleParser(msg.source);
         (parsed as any).flags = msg.flags;
         emails.push(mapParsedEmail(parsed, folder, this.accountId, msg.uid));
-      }
-    } else {
-      for await (const msg of this.client.fetch(uids, {
-        envelope: true, uid: true, flags: true, bodyStructure: true,
-      })) {
+      } else {
         const env = msg.envelope;
         emails.push({
           id: String(msg.uid),

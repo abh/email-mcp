@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.8] - 2026-03-16
+
+### Fixed
+- **Root cause fix for iCloud Junk/Trash "Invalid message number"** — `fetchEmails()` now uses `fetchAll()` with `{ uid: true }` option instead of `for await ... fetch()`. The original code passed UID arrays without telling ImapFlow they were UIDs (not sequence numbers), causing iCloud to reject the FETCH command
+- `collectUidsViaFetch()` also switched from async iterators to `fetchAll()` for reliable error handling
+- Search and fetch fallback chain hardened — any failure at any level is caught and falls through gracefully
+
 ## [1.2.7] - 2026-03-16
 
 ### Fixed
