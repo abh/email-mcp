@@ -417,13 +417,47 @@ describe('ImapAdapter send, move, delete, mark, createFolder', () => {
   it('markEmail removes \\Flagged when starred=false', async () => {
     await adapter.markEmail('789', { starred: false });
     const client = (adapter as any).client;
-    expect(client.messageFlagsRemove).toHaveBeenCalledWith('789', ['\\Flagged'], { uid: true });
+    expect(client.messageFlagsRemove).toHaveBeenCalledWith('789', ['\\Flagged', '$MailFlagBit0', '$MailFlagBit1', '$MailFlagBit2'], { uid: true });
   });
 
   it('markEmail handles flagged param', async () => {
     await adapter.markEmail('789', { flagged: true });
     const client = (adapter as any).client;
     expect(client.messageFlagsAdd).toHaveBeenCalledWith('789', ['\\Flagged'], { uid: true });
+  });
+
+  it('markEmail with flagColor blue sets \\Flagged and $MailFlagBit2', async () => {
+    await adapter.markEmail('789', { flagColor: 'blue' });
+    const client = (adapter as any).client;
+    expect(client.messageFlagsRemove).toHaveBeenCalledWith('789', ['$MailFlagBit0', '$MailFlagBit1', '$MailFlagBit2'], { uid: true });
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith('789', ['\\Flagged', '$MailFlagBit2'], { uid: true });
+  });
+
+  it('markEmail with flagColor red sets \\Flagged with no color bits', async () => {
+    await adapter.markEmail('789', { flagColor: 'red' });
+    const client = (adapter as any).client;
+    expect(client.messageFlagsRemove).toHaveBeenCalledWith('789', ['$MailFlagBit0', '$MailFlagBit1', '$MailFlagBit2'], { uid: true });
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith('789', ['\\Flagged'], { uid: true });
+  });
+
+  it('markEmail with flagColor green sets \\Flagged, $MailFlagBit0, $MailFlagBit1', async () => {
+    await adapter.markEmail('789', { flagColor: 'green' });
+    const client = (adapter as any).client;
+    expect(client.messageFlagsRemove).toHaveBeenCalledWith('789', ['$MailFlagBit0', '$MailFlagBit1', '$MailFlagBit2'], { uid: true });
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith('789', ['\\Flagged', '$MailFlagBit0', '$MailFlagBit1'], { uid: true });
+  });
+
+  it('markEmail with flagColor none clears \\Flagged and all color bits', async () => {
+    await adapter.markEmail('789', { flagColor: 'none' });
+    const client = (adapter as any).client;
+    expect(client.messageFlagsRemove).toHaveBeenCalledWith('789', ['\\Flagged', '$MailFlagBit0', '$MailFlagBit1', '$MailFlagBit2'], { uid: true });
+    expect(client.messageFlagsAdd).not.toHaveBeenCalled();
+  });
+
+  it('markEmail with flagged=false clears color bits too', async () => {
+    await adapter.markEmail('789', { flagged: false });
+    const client = (adapter as any).client;
+    expect(client.messageFlagsRemove).toHaveBeenCalledWith('789', ['\\Flagged', '$MailFlagBit0', '$MailFlagBit1', '$MailFlagBit2'], { uid: true });
   });
 
   it('createFolder calls mailboxCreate', async () => {

@@ -8,6 +8,7 @@ import type {
   AccountCredentials,
   ProviderTypeValue,
   BatchResult,
+  MarkFlags,
 } from '../models/types.js';
 
 export interface SendEmailParams {
@@ -42,12 +43,12 @@ export interface EmailProvider {
 
   moveEmail(emailId: string, targetFolder: string, sourceFolder?: string): Promise<void>;
   deleteEmail(emailId: string, permanent?: boolean, sourceFolder?: string): Promise<void>;
-  markEmail(emailId: string, flags: { read?: boolean; starred?: boolean; flagged?: boolean }, sourceFolder?: string): Promise<void>;
+  markEmail(emailId: string, flags: MarkFlags, sourceFolder?: string): Promise<void>;
 
   // Batch operations (optional - providers that don't implement fall back to sequential)
   batchDelete?(emailIds: string[], permanent?: boolean, sourceFolder?: string): Promise<BatchResult>;
   batchMove?(emailIds: string[], targetFolder: string, sourceFolder?: string): Promise<BatchResult>;
-  batchMark?(emailIds: string[], flags: { read?: boolean; starred?: boolean; flagged?: boolean }, sourceFolder?: string): Promise<BatchResult>;
+  batchMark?(emailIds: string[], flags: MarkFlags, sourceFolder?: string): Promise<BatchResult>;
 
   // Provider-specific (optional)
   addLabels?(emailId: string, labels: string[]): Promise<void>;

@@ -1,4 +1,4 @@
-import type { Folder, Email, Contact, AttachmentMeta, FolderTypeValue } from '../../models/types.js';
+import type { Folder, Email, Contact, AttachmentMeta, FolderTypeValue, FlagColorValue } from '../../models/types.js';
 import { FolderType } from '../../models/types.js';
 
 const SPECIAL_USE_MAP: Record<string, FolderTypeValue> = {
@@ -63,6 +63,7 @@ export function mapParsedEmail(parsed: any, folder: string, accountId: string, u
       starred: parsed.flags?.has('\\Flagged') || false,
       flagged: parsed.flags?.has('\\Flagged') || false,
       draft: parsed.flags?.has('\\Draft') || false,
+      flagColor: (parsed.flagColor as FlagColorValue) || undefined,
     },
     headers: parsed.headerLines
       ? Object.fromEntries(parsed.headerLines.map((h: any) => [h.key, h.line]))

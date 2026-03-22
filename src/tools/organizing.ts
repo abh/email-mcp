@@ -1,10 +1,30 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AccountManager } from '../account-manager.js';
-import type { BatchResult } from '../models/types.js';
+import type { BatchResult, MarkFlags } from '../models/types.js';
+import { FlagColor } from '../models/types.js';
 
 function jsonResult(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data) }] };
+}
+
+const flagColorValues = [...Object.values(FlagColor), 'none'] as [string, ...string[]];
+const flagColorSchema = z.enum(flagColorValues)
+  .optional()
+  .describe('Apple Mail flag color (IMAP/iCloud only). Set "none" to clear.');
+
+function buildMarkFlags(args: {
+  read?: boolean;
+  starred?: boolean;
+  flagged?: boolean;
+  flagColor?: string;
+}): MarkFlags {
+  const flags: MarkFlags = {};
+  if (args.read !== undefined) flags.read = args.read;
+  if (args.starred !== undefined) flags.starred = args.starred;
+  if (args.flagged !== undefined) flags.flagged = args.flagged;
+  if (args.flagColor !== undefined) flags.flagColor = args.flagColor as MarkFlags['flagColor'];
+  return flags;
 }
 
 export function registerOrganizingTools(server: McpServer, accountManager: AccountManager): void {
@@ -53,23 +73,20 @@ export function registerOrganizingTools(server: McpServer, accountManager: Accou
   // --- email_mark ---
   server.tool(
     'email_mark',
-    'Mark an email as read/unread, starred, or flagged',
+    'Mark an email as read/unread, starred, flagged, or set a colored flag (IMAP/iCloud)',
     {
       accountId: z.string(),
       emailId: z.string(),
       read: z.boolean().optional(),
       starred: z.boolean().optional(),
       flagged: z.boolean().optional(),
+      flagColor: flagColorSchema,
       sourceFolder: z.string().optional().describe('Source folder (required for IMAP/iCloud when email is not in INBOX)'),
     },
     async (args) => {
       try {
         const provider = await accountManager.getProvider(args.accountId);
-        const flags: { read?: boolean; starred?: boolean; flagged?: boolean } = {};
-        if (args.read !== undefined) flags.read = args.read;
-        if (args.starred !== undefined) flags.starred = args.starred;
-        if (args.flagged !== undefined) flags.flagged = args.flagged;
-        await provider.markEmail(args.emailId, flags, args.sourceFolder);
+        await provider.markEmail(args.emailId, buildMarkFlags(args), args.sourceFolder);
         return jsonResult({ success: true });
       } catch (error: any) {
         return jsonResult({ success: false, error: error.message });
@@ -152,22 +169,20 @@ export function registerOrganizingTools(server: McpServer, accountManager: Accou
   // --- email_batch_mark ---
   server.tool(
     'email_batch_mark',
-    'Mark multiple emails at once (read/unread, starred, flagged). Much faster than individual marks.',
+    'Mark multiple emails at once (read/unread, starred, flagged, or colored flag). Much faster than individual marks.',
     {
       accountId: z.string(),
       emailIds: z.array(z.string()).min(1).describe('Array of email IDs to mark'),
       read: z.boolean().optional(),
       starred: z.boolean().optional(),
       flagged: z.boolean().optional(),
+      flagColor: flagColorSchema,
       sourceFolder: z.string().optional().describe('Source folder (required for IMAP/iCloud when emails are not in INBOX)'),
     },
     async (args) => {
       try {
         const provider = await accountManager.getProvider(args.accountId);
-        const flags: { read?: boolean; starred?: boolean; flagged?: boolean } = {};
-        if (args.read !== undefined) flags.read = args.read;
-        if (args.starred !== undefined) flags.starred = args.starred;
-        if (args.flagged !== undefined) flags.flagged = args.flagged;
+        const flags = buildMarkFlags(args);
 
         if (provider.batchMark) {
           const result = await provider.batchMark(args.emailIds, flags, args.sourceFolder);

@@ -19,6 +19,25 @@ export const FolderType = {
 
 export type FolderTypeValue = (typeof FolderType)[keyof typeof FolderType];
 
+export const FlagColor = {
+  Red: 'red',
+  Orange: 'orange',
+  Yellow: 'yellow',
+  Green: 'green',
+  Blue: 'blue',
+  Purple: 'purple',
+  Grey: 'grey',
+} as const;
+
+export type FlagColorValue = (typeof FlagColor)[keyof typeof FlagColor];
+
+export interface MarkFlags {
+  read?: boolean;
+  starred?: boolean;
+  flagged?: boolean;
+  flagColor?: FlagColorValue | 'none';
+}
+
 export function isProviderSupported(provider: string): provider is ProviderTypeValue {
   return Object.values(ProviderType).includes(provider as ProviderTypeValue);
 }
@@ -56,6 +75,7 @@ export interface Email {
     starred: boolean;
     flagged: boolean;
     draft: boolean;
+    flagColor?: FlagColorValue;
   };
   headers?: Record<string, string>;
   truncated?: boolean;

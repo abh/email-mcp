@@ -246,6 +246,26 @@ describe('Organizing tools', () => {
       expect(parsed.success).toBe(false);
       expect(parsed.error).toContain('Connection lost');
     });
+
+    it('calls provider.markEmail with flagColor', async () => {
+      await callTool(server, 'email_mark', {
+        accountId: 'acct-1',
+        emailId: 'msg-1',
+        flagColor: 'blue',
+      });
+
+      expect(mockProvider.markEmail).toHaveBeenCalledWith('msg-1', { flagColor: 'blue' }, undefined);
+    });
+
+    it('calls provider.markEmail with flagColor none', async () => {
+      await callTool(server, 'email_mark', {
+        accountId: 'acct-1',
+        emailId: 'msg-1',
+        flagColor: 'none',
+      });
+
+      expect(mockProvider.markEmail).toHaveBeenCalledWith('msg-1', { flagColor: 'none' }, undefined);
+    });
   });
 
   describe('email_label', () => {

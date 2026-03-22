@@ -11,10 +11,53 @@ import type {
   ProviderTypeValue,
   PasswordCredentials,
   BatchResult,
+  MarkFlags,
 } from '../../models/types.js';
+import type { FlagColorValue } from '../../models/types.js';
 import { ProviderType, FolderType } from '../../models/types.js';
 import { mapImapFolder, mapParsedEmail } from './mapper.js';
 import { createSmtpTransport, sendViaSmtp } from './smtp.js';
+
+/** Apple Mail color → $MailFlagBit keywords to add (all colors require \Flagged too) */
+const FLAG_COLOR_BITS: Record<FlagColorValue, string[]> = {
+  red:    [],
+  orange: ['$MailFlagBit0'],
+  yellow: ['$MailFlagBit1'],
+  green:  ['$MailFlagBit0', '$MailFlagBit1'],
+  blue:   ['$MailFlagBit2'],
+  purple: ['$MailFlagBit0', '$MailFlagBit2'],
+  grey:   ['$MailFlagBit1', '$MailFlagBit2'],
+};
+const ALL_COLOR_BITS = ['$MailFlagBit0', '$MailFlagBit1', '$MailFlagBit2'];
+
+/**
+ * Apply mark flags (read, starred, flagged, flagColor) to one or more messages.
+ * `target` is either a single UID string or a comma-separated UID range.
+ */
+async function applyMarkFlags(client: ImapFlow, target: string, flags: MarkFlags): Promise<void> {
+  if (flags.read === true) {
+    await client.messageFlagsAdd(target, ['\\Seen'], { uid: true });
+  } else if (flags.read === false) {
+    await client.messageFlagsRemove(target, ['\\Seen'], { uid: true });
+  }
+
+  if (flags.flagColor !== undefined) {
+    if (flags.flagColor === 'none') {
+      await client.messageFlagsRemove(target,
+        ['\\Flagged', ...ALL_COLOR_BITS], { uid: true });
+    } else {
+      await client.messageFlagsRemove(target, ALL_COLOR_BITS, { uid: true });
+      const bitsToAdd = FLAG_COLOR_BITS[flags.flagColor];
+      await client.messageFlagsAdd(target,
+        ['\\Flagged', ...bitsToAdd], { uid: true });
+    }
+  } else if (flags.starred === true || flags.flagged === true) {
+    await client.messageFlagsAdd(target, ['\\Flagged'], { uid: true });
+  } else if (flags.starred === false || flags.flagged === false) {
+    await client.messageFlagsRemove(target,
+      ['\\Flagged', ...ALL_COLOR_BITS], { uid: true });
+  }
+}
 
 /**
  * Extracts detailed diagnostic information from ImapFlow errors.
@@ -348,6 +391,7 @@ export class ImapAdapter implements EmailProvider {
       if (returnBody) {
         const parsed = await simpleParser(msg.source);
         (parsed as any).flags = msg.flags;
+        (parsed as any).flagColor = msg.flagColor;
         emails.push(mapParsedEmail(parsed, folder, this.accountId, msg.uid));
       } else {
         const env = msg.envelope;
@@ -370,6 +414,7 @@ export class ImapAdapter implements EmailProvider {
             starred: msg.flags?.has('\\Flagged') ?? false,
             flagged: msg.flags?.has('\\Flagged') ?? false,
             draft: msg.flags?.has('\\Draft') ?? false,
+            flagColor: msg.flagColor || undefined,
           },
         });
       }
@@ -396,6 +441,7 @@ export class ImapAdapter implements EmailProvider {
 
       const parsed = await simpleParser(msg.source);
       (parsed as any).flags = msg.flags;
+      (parsed as any).flagColor = msg.flagColor;
       return mapParsedEmail(parsed, targetFolder, this.accountId, msg.uid);
     } finally {
       lock.release();
@@ -563,7 +609,7 @@ export class ImapAdapter implements EmailProvider {
     }
   }
 
-  async markEmail(emailId: string, flags: { read?: boolean; starred?: boolean; flagged?: boolean }, sourceFolder?: string): Promise<void> {
+  async markEmail(emailId: string, flags: MarkFlags, sourceFolder?: string): Promise<void> {
     if (!this.client) throw new Error('Not connected');
     const folder = sourceFolder || 'INBOX';
     let lock;
@@ -573,17 +619,7 @@ export class ImapAdapter implements EmailProvider {
       throw formatImapError(error, `Failed to open folder "${folder}"`);
     }
     try {
-      if (flags.read === true) {
-        await this.client.messageFlagsAdd(emailId, ['\\Seen'], { uid: true });
-      } else if (flags.read === false) {
-        await this.client.messageFlagsRemove(emailId, ['\\Seen'], { uid: true });
-      }
-
-      if (flags.starred === true || flags.flagged === true) {
-        await this.client.messageFlagsAdd(emailId, ['\\Flagged'], { uid: true });
-      } else if (flags.starred === false || flags.flagged === false) {
-        await this.client.messageFlagsRemove(emailId, ['\\Flagged'], { uid: true });
-      }
+      await applyMarkFlags(this.client, emailId, flags);
     } finally {
       lock.release();
     }
@@ -663,7 +699,7 @@ export class ImapAdapter implements EmailProvider {
     return result;
   }
 
-  async batchMark(emailIds: string[], flags: { read?: boolean; starred?: boolean; flagged?: boolean }, sourceFolder?: string): Promise<BatchResult> {
+  async batchMark(emailIds: string[], flags: MarkFlags, sourceFolder?: string): Promise<BatchResult> {
     if (!this.client) throw new Error('Not connected');
     const result: BatchResult = { succeeded: [], failed: [] };
     const folder = sourceFolder || 'INBOX';
@@ -677,23 +713,15 @@ export class ImapAdapter implements EmailProvider {
     try {
       const uidRange = emailIds.join(',');
 
-      if (flags.read === true) {
-        await this.client.messageFlagsAdd(uidRange, ['\\Seen'], { uid: true });
-      } else if (flags.read === false) {
-        await this.client.messageFlagsRemove(uidRange, ['\\Seen'], { uid: true });
-      }
-
-      if (flags.starred === true || flags.flagged === true) {
-        await this.client.messageFlagsAdd(uidRange, ['\\Flagged'], { uid: true });
-      } else if (flags.starred === false || flags.flagged === false) {
-        await this.client.messageFlagsRemove(uidRange, ['\\Flagged'], { uid: true });
-      }
+      await applyMarkFlags(this.client, uidRange, flags);
 
       result.succeeded = [...emailIds];
     } catch (error: any) {
+      // Fallback to individual operations — use applyMarkFlags directly
+      // since we already hold the mailbox lock (markEmail would deadlock).
       for (const id of emailIds) {
         try {
-          await this.markEmail(id, flags, folder);
+          await applyMarkFlags(this.client, id, flags);
           result.succeeded.push(id);
         } catch (e: any) {
           result.failed.push({ id, error: e.message });
