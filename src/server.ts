@@ -11,8 +11,13 @@ export interface ServerResult {
   accountManager: AccountManager;
 }
 
-export async function createServer(accountManager?: AccountManager): Promise<ServerResult> {
-  const mgr = accountManager ?? new AccountManager();
+export interface CreateServerOptions {
+  accountManager?: AccountManager;
+  allowedAccountIds?: Set<string>;
+}
+
+export async function createServer(options?: CreateServerOptions): Promise<ServerResult> {
+  const mgr = options?.accountManager ?? new AccountManager(undefined, options?.allowedAccountIds);
 
   const server = new McpServer({
     name: 'email-mcp',
@@ -28,8 +33,8 @@ export async function createServer(accountManager?: AccountManager): Promise<Ser
   return { server, accountManager: mgr };
 }
 
-export async function startServer(): Promise<void> {
-  const { server } = await createServer();
+export async function startServer(allowedAccountIds?: Set<string>): Promise<void> {
+  const { server } = await createServer({ allowedAccountIds });
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

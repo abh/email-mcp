@@ -25,18 +25,38 @@ function createProvider(provider: ProviderTypeValue): EmailProvider {
   }
 }
 
+/**
+ * Match an account reference (name or ID) against a list of accounts.
+ * Tries case-insensitive name match first, then exact ID match.
+ */
+export function resolveAccountRef(
+  ref: string,
+  accounts: AccountCredentials[],
+): AccountCredentials | undefined {
+  const lower = ref.toLowerCase();
+  return (
+    accounts.find((a) => a.name.toLowerCase() === lower) ??
+    accounts.find((a) => a.id === ref)
+  );
+}
+
 export class AccountManager {
   private store: CredentialStore;
   private providers: Map<string, EmailProvider> = new Map();
   private credentials: Map<string, AccountCredentials> = new Map();
+  private allowedAccountIds?: Set<string>;
 
-  constructor(store?: CredentialStore) {
+  constructor(store?: CredentialStore, allowedAccountIds?: Set<string>) {
     this.store = store ?? new CredentialStore();
+    this.allowedAccountIds = allowedAccountIds;
   }
 
   async listAccounts(): Promise<Account[]> {
     const creds = await this.store.list();
-    return creds.map((c) => ({
+    const filtered = this.allowedAccountIds
+      ? creds.filter((c) => this.allowedAccountIds.has(c.id))
+      : creds;
+    return filtered.map((c) => ({
       id: c.id,
       name: c.name,
       provider: c.provider,
@@ -46,6 +66,10 @@ export class AccountManager {
   }
 
   async getProvider(accountId: string): Promise<EmailProvider> {
+    if (this.allowedAccountIds && !this.allowedAccountIds.has(accountId)) {
+      throw new Error(`Account ${accountId} is not in the allowed accounts list for this instance`);
+    }
+
     const existing = this.providers.get(accountId);
     if (existing) {
       // Check if OAuth token has expired mid-session — reconnect if so
@@ -107,6 +131,25 @@ export class AccountManager {
       this.providers.delete(accountId);
       this.credentials.delete(accountId);
     }
+  }
+
+  /**
+   * Resolve an array of name-or-id references to a set of account IDs.
+   */
+  static resolveAccountRefs(
+    refs: string[],
+    accounts: AccountCredentials[],
+  ): Set<string> {
+    const ids = new Set<string>();
+    for (const ref of refs) {
+      const match = resolveAccountRef(ref, accounts);
+      if (match) {
+        ids.add(match.id);
+      } else {
+        throw new Error(`Account not found: "${ref}"`);
+      }
+    }
+    return ids;
   }
 
   async disconnectAll(): Promise<void> {

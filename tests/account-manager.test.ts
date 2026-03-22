@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { AccountManager } from '../src/account-manager.js';
+import { AccountManager, resolveAccountRef } from '../src/account-manager.js';
 import { CredentialStore } from '../src/auth/credential-store.js';
 import { ProviderType } from '../src/models/types.js';
 import type { AccountCredentials } from '../src/models/types.js';
@@ -208,5 +208,120 @@ describe('AccountManager', () => {
     // Even if getting one fails, the other works
     const provider = await manager.getProvider('icloud-1');
     expect(provider.providerType).toBe('icloud');
+  });
+
+  describe('allowedAccountIds filtering', () => {
+    it('listAccounts returns only allowed accounts', async () => {
+      await store.save(gmailCreds);
+      await store.save(icloudCreds);
+
+      const filtered = new AccountManager(store, new Set(['gmail-1']));
+      const accounts = await filtered.listAccounts();
+      expect(accounts).toHaveLength(1);
+      expect(accounts[0].id).toBe('gmail-1');
+    });
+
+    it('getProvider rejects accounts not in allowed set', async () => {
+      await store.save(gmailCreds);
+      await store.save(icloudCreds);
+
+      const filtered = new AccountManager(store, new Set(['gmail-1']));
+      await expect(filtered.getProvider('icloud-1')).rejects.toThrow(
+        'not in the allowed accounts list',
+      );
+    });
+
+    it('getProvider allows accounts in the allowed set', async () => {
+      await store.save(gmailCreds);
+
+      const filtered = new AccountManager(store, new Set(['gmail-1']));
+      const provider = await filtered.getProvider('gmail-1');
+      expect(provider.providerType).toBe('gmail');
+    });
+
+    it('no allowlist means all accounts accessible', async () => {
+      await store.save(gmailCreds);
+      await store.save(icloudCreds);
+
+      const unfiltered = new AccountManager(store);
+      const accounts = await unfiltered.listAccounts();
+      expect(accounts).toHaveLength(2);
+    });
+  });
+
+  describe('resolveAccountRefs', () => {
+    it('resolves names to IDs', async () => {
+      await store.save(gmailCreds);
+      await store.save(icloudCreds);
+      const accounts = await store.list();
+
+      const ids = AccountManager.resolveAccountRefs(['My Gmail'], accounts);
+      expect(ids).toEqual(new Set(['gmail-1']));
+    });
+
+    it('resolves names case-insensitively', async () => {
+      await store.save(gmailCreds);
+      const accounts = await store.list();
+
+      const ids = AccountManager.resolveAccountRefs(['my gmail'], accounts);
+      expect(ids).toEqual(new Set(['gmail-1']));
+    });
+
+    it('resolves by ID when name does not match', async () => {
+      await store.save(gmailCreds);
+      const accounts = await store.list();
+
+      const ids = AccountManager.resolveAccountRefs(['gmail-1'], accounts);
+      expect(ids).toEqual(new Set(['gmail-1']));
+    });
+
+    it('throws for unknown reference', async () => {
+      await store.save(gmailCreds);
+      const accounts = await store.list();
+
+      expect(() =>
+        AccountManager.resolveAccountRefs(['nonexistent'], accounts),
+      ).toThrow('Account not found: "nonexistent"');
+    });
+  });
+});
+
+describe('resolveAccountRef', () => {
+  const accounts: AccountCredentials[] = [
+    {
+      id: 'id-1',
+      name: 'Work',
+      provider: ProviderType.Gmail,
+      email: 'work@example.com',
+    },
+    {
+      id: 'id-2',
+      name: 'Personal',
+      provider: ProviderType.ICloud,
+      email: 'personal@example.com',
+    },
+  ];
+
+  it('matches by name case-insensitively', () => {
+    expect(resolveAccountRef('work', accounts)?.id).toBe('id-1');
+    expect(resolveAccountRef('WORK', accounts)?.id).toBe('id-1');
+    expect(resolveAccountRef('Work', accounts)?.id).toBe('id-1');
+  });
+
+  it('matches by exact ID', () => {
+    expect(resolveAccountRef('id-2', accounts)?.id).toBe('id-2');
+  });
+
+  it('prefers name match over ID match', () => {
+    const ambiguous: AccountCredentials[] = [
+      { id: 'some-uuid', name: 'target-id', provider: ProviderType.Gmail, email: 'a@example.com' },
+      { id: 'target-id', name: 'Other', provider: ProviderType.Gmail, email: 'b@example.com' },
+    ];
+    // "target-id" matches the first account by name
+    expect(resolveAccountRef('target-id', ambiguous)?.id).toBe('some-uuid');
+  });
+
+  it('returns undefined for no match', () => {
+    expect(resolveAccountRef('nope', accounts)).toBeUndefined();
   });
 });

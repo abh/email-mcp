@@ -311,7 +311,7 @@ describe('Server creation', () => {
       listAccounts: vi.fn(),
     } as unknown as AccountManager;
 
-    const result = await createServer(customManager);
+    const result = await createServer({ accountManager: customManager });
     expect(result.accountManager).toBe(customManager);
   });
 

@@ -51,6 +51,48 @@ The wizard will walk you through provider selection and authentication. After ea
 
 3. Start using email tools in Claude Code — search your inbox, send emails, organize messages, and more.
 
+## CLI Commands
+
+```bash
+npx @marlinjai/email-mcp                          # Start the MCP server (stdio transport)
+npx @marlinjai/email-mcp setup                    # Add or configure an email account
+npx @marlinjai/email-mcp accounts                 # List configured accounts
+npx @marlinjai/email-mcp accounts remove <ref>    # Remove an account by name or ID
+npx @marlinjai/email-mcp --help                   # Show usage
+```
+
+### Per-Instance Account Filtering
+
+By default, every server instance exposes all configured accounts. To restrict which accounts are visible to a given instance, use the `--accounts` flag or the `EMAIL_MCP_ACCOUNTS` environment variable. Values are matched by account name (case-insensitive) or UUID.
+
+```bash
+# CLI flag — only expose the "work" account
+npx @marlinjai/email-mcp --accounts work
+
+# Multiple accounts, comma-separated
+npx @marlinjai/email-mcp --accounts work,personal
+
+# Environment variable (CLI flag takes precedence if both are set)
+EMAIL_MCP_ACCOUNTS=work npx @marlinjai/email-mcp
+```
+
+This is useful when you want different MCP configurations for different contexts. For example, a work-only config and a personal-only config:
+
+```json
+{
+  "mcpServers": {
+    "work-email": {
+      "command": "npx",
+      "args": ["@marlinjai/email-mcp", "--accounts", "work"]
+    },
+    "personal-email": {
+      "command": "npx",
+      "args": ["@marlinjai/email-mcp", "--accounts", "personal"]
+    }
+  }
+}
+```
+
 ## Provider Setup Guides
 
 ### Gmail
