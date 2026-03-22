@@ -109,8 +109,8 @@ describe('AccountManager', () => {
 
     const accounts = await manager.listAccounts();
     expect(accounts).toHaveLength(2);
-    expect(accounts[0].connected).toBe(false);
-    expect(accounts[1].connected).toBe(false);
+    expect(accounts[0].status).toBe('configured');
+    expect(accounts[1].status).toBe('configured');
   });
 
   it('returns correct provider for account', async () => {
@@ -126,7 +126,7 @@ describe('AccountManager', () => {
 
     const accounts = await manager.listAccounts();
     const icloud = accounts.find((a) => a.id === 'icloud-1');
-    expect(icloud?.connected).toBe(true);
+    expect(icloud?.status).toBe('active');
   });
 
   it('adds and connects an account', async () => {
@@ -134,7 +134,7 @@ describe('AccountManager', () => {
 
     const accounts = await manager.listAccounts();
     expect(accounts).toHaveLength(1);
-    expect(accounts[0].connected).toBe(true);
+    expect(accounts[0].status).toBe('active');
   });
 
   it('removes an account', async () => {
@@ -165,7 +165,7 @@ describe('AccountManager', () => {
     await manager.disconnectAll();
 
     const accounts = await manager.listAccounts();
-    expect(accounts.every((a) => !a.connected)).toBe(true);
+    expect(accounts.every((a) => a.status === 'configured')).toBe(true);
   });
 
   it('creates correct provider type for each provider', async () => {

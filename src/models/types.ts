@@ -121,7 +121,8 @@ export interface Account {
   name: string;
   provider: ProviderTypeValue;
   email: string;
-  connected: boolean;
+  status: 'configured' | 'active' | 'error';
+  error?: string;
 }
 
 export interface OAuthTokens {

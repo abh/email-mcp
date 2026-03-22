@@ -52,8 +52,8 @@ describe('Account tools', () => {
 
     it('returns list of accounts from AccountManager', async () => {
       const accounts: Account[] = [
-        { id: 'gmail-1', name: 'My Gmail', provider: 'gmail', email: 'test@gmail.com', connected: true },
-        { id: 'icloud-1', name: 'My iCloud', provider: 'icloud', email: 'test@icloud.com', connected: false },
+        { id: 'gmail-1', name: 'My Gmail', provider: 'gmail', email: 'test@gmail.com', status: 'active' },
+        { id: 'icloud-1', name: 'My iCloud', provider: 'icloud', email: 'test@icloud.com', status: 'configured' },
       ];
       (accountManager.listAccounts as ReturnType<typeof vi.fn>).mockResolvedValue(accounts);
 
@@ -64,9 +64,9 @@ describe('Account tools', () => {
       expect(parsed).toHaveLength(2);
       expect(parsed[0].id).toBe('gmail-1');
       expect(parsed[0].provider).toBe('gmail');
-      expect(parsed[0].connected).toBe(true);
+      expect(parsed[0].status).toBe('active');
       expect(parsed[1].id).toBe('icloud-1');
-      expect(parsed[1].connected).toBe(false);
+      expect(parsed[1].status).toBe('configured');
     });
 
     it('returns empty array when no accounts exist', async () => {

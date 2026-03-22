@@ -44,6 +44,7 @@ export class AccountManager {
   private store: CredentialStore;
   private providers: Map<string, EmailProvider> = new Map();
   private credentials: Map<string, AccountCredentials> = new Map();
+  private connectionErrors: Map<string, string> = new Map();
   private allowedAccountIds?: Set<string>;
 
   constructor(store?: CredentialStore, allowedAccountIds?: Set<string>) {
@@ -56,13 +57,17 @@ export class AccountManager {
     const filtered = this.allowedAccountIds
       ? creds.filter((c) => this.allowedAccountIds.has(c.id))
       : creds;
-    return filtered.map((c) => ({
-      id: c.id,
-      name: c.name,
-      provider: c.provider,
-      email: c.email,
-      connected: this.providers.has(c.id),
-    }));
+    return filtered.map((c) => {
+      const error = this.connectionErrors.get(c.id);
+      return {
+        id: c.id,
+        name: c.name,
+        provider: c.provider,
+        email: c.email,
+        status: error ? 'error' as const : this.providers.has(c.id) ? 'active' as const : 'configured' as const,
+        ...(error && { error }),
+      };
+    });
   }
 
   async getProvider(accountId: string): Promise<EmailProvider> {
@@ -104,10 +109,16 @@ export class AccountManager {
       await this.refreshTokenIfNeeded(creds);
     }
 
-    const provider = createProvider(creds.provider);
-    await provider.connect(creds);
-    this.providers.set(accountId, provider);
-    this.credentials.set(accountId, creds);
+    try {
+      const provider = createProvider(creds.provider);
+      await provider.connect(creds);
+      this.providers.set(accountId, provider);
+      this.credentials.set(accountId, creds);
+      this.connectionErrors.delete(accountId);
+    } catch (err: any) {
+      this.connectionErrors.set(accountId, err.message ?? String(err));
+      throw err;
+    }
   }
 
   async addAccount(creds: AccountCredentials): Promise<void> {
