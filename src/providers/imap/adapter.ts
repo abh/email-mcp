@@ -291,6 +291,9 @@ export class ImapAdapter implements EmailProvider {
         }
       }
 
+      // Reverse so highest UIDs (newest messages) come first, matching Gmail/Outlook behavior
+      allUids.reverse();
+
       const offset = query.offset || 0;
       const slicedUids = query.limit
         ? allUids.slice(offset, offset + query.limit)
@@ -419,6 +422,10 @@ export class ImapAdapter implements EmailProvider {
         });
       }
     }
+
+    // Sort by UID descending (newest first) to preserve the caller's intended order,
+    // since fetchAll may return messages in ascending server order.
+    emails.sort((a, b) => Number(b.id) - Number(a.id));
 
     return emails;
   }
