@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import {
   PublicClientApplication,
   CryptoProvider,
@@ -18,9 +17,9 @@ export interface OutlookAuthResult {
   homeAccountId?: string;
 }
 
-/** Default directory for MSAL cache file */
-const DEFAULT_CACHE_DIR = path.join(os.homedir(), '.email-mcp');
-const DEFAULT_CACHE_FILE = path.join(DEFAULT_CACHE_DIR, 'msal-cache.json');
+import { getConfigDir } from '../../auth/key-store.js';
+
+const DEFAULT_CACHE_FILE = path.join(getConfigDir(), 'msal-cache.json');
 
 /**
  * Creates a file-based ICachePlugin for persisting MSAL's token cache.
