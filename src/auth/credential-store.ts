@@ -1,47 +1,29 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import type { AccountCredentials } from '../models/types.js';
+import { getConfigDir, getOrCreateEncryptionKey } from './key-store.js';
 
 const ALGORITHM = 'aes-256-gcm';
-const KEY_LENGTH = 32;
 const IV_LENGTH = 16;
-const SALT_LENGTH = 32;
-const PBKDF2_ITERATIONS = 100_000;
 
-function getMachineSeed(): string {
-  return `email-mcp:${os.hostname()}:${os.userInfo().username}`;
-}
-
-function deriveKey(salt: Buffer): Buffer {
-  return crypto.pbkdf2Sync(getMachineSeed(), salt, PBKDF2_ITERATIONS, KEY_LENGTH, 'sha512');
-}
-
-function encrypt(plaintext: string): string {
-  const salt = crypto.randomBytes(SALT_LENGTH);
-  const key = deriveKey(salt);
+function encrypt(plaintext: string, key: Buffer): string {
   const iv = crypto.randomBytes(IV_LENGTH);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-
   let encrypted = cipher.update(plaintext, 'utf-8', 'hex');
   encrypted += cipher.final('hex');
   const authTag = cipher.getAuthTag();
-
   return JSON.stringify({
-    salt: salt.toString('hex'),
     iv: iv.toString('hex'),
     authTag: authTag.toString('hex'),
     data: encrypted,
   });
 }
 
-function decrypt(ciphertext: string): string {
-  const { salt, iv, authTag, data } = JSON.parse(ciphertext);
-  const key = deriveKey(Buffer.from(salt, 'hex'));
+function decrypt(ciphertext: string, key: Buffer): string {
+  const { iv, authTag, data } = JSON.parse(ciphertext);
   const decipher = crypto.createDecipheriv(ALGORITHM, key, Buffer.from(iv, 'hex'));
   decipher.setAuthTag(Buffer.from(authTag, 'hex'));
-
   let decrypted = decipher.update(data, 'hex', 'utf-8');
   decrypted += decipher.final('utf-8');
   return decrypted;
@@ -52,28 +34,48 @@ interface StoredData {
 }
 
 export class CredentialStore {
+  private configDir: string;
   private filePath: string;
+  private key: Buffer | null = null;
+  private dirOverride: string | undefined;
 
   constructor(dir?: string) {
-    const baseDir = dir ?? path.join(os.homedir(), '.email-mcp');
-    if (!fs.existsSync(baseDir)) {
-      fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
+    this.dirOverride = dir;
+    this.configDir = dir ?? getConfigDir();
+    if (!fs.existsSync(this.configDir)) {
+      fs.mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     }
-    this.filePath = path.join(baseDir, 'credentials.enc');
+    this.filePath = path.join(this.configDir, 'credentials.enc');
+  }
+
+  private getKey(): Buffer {
+    if (!this.key) {
+      this.key = getOrCreateEncryptionKey(this.dirOverride);
+    }
+    return this.key;
   }
 
   private read(): StoredData {
     if (!fs.existsSync(this.filePath)) {
       return { accounts: {} };
     }
-    const raw = fs.readFileSync(this.filePath, 'utf-8');
-    const json = decrypt(raw);
-    return JSON.parse(json);
+    try {
+      const raw = fs.readFileSync(this.filePath, 'utf-8');
+      const json = decrypt(raw, this.getKey());
+      return JSON.parse(json);
+    } catch {
+      const backupPath = this.filePath + '.bak';
+      fs.renameSync(this.filePath, backupPath);
+      console.error(
+        `Credentials file could not be decrypted. Backup saved as ${backupPath}. Re-run setup to re-authenticate.`
+      );
+      return { accounts: {} };
+    }
   }
 
   private write(data: StoredData): void {
     const json = JSON.stringify(data);
-    const encrypted = encrypt(json);
+    const encrypted = encrypt(json, this.getKey());
     fs.writeFileSync(this.filePath, encrypted, { mode: 0o600 });
   }
 

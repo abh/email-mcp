@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CredentialStore } from '../../src/auth/credential-store.js';
+import { resetKeyCache } from '../../src/auth/key-store.js';
 import { ProviderType } from '../../src/models/types.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,6 +16,7 @@ describe('CredentialStore', () => {
   });
 
   afterEach(() => {
+    resetKeyCache();
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -122,5 +124,42 @@ describe('CredentialStore', () => {
 
     const all = await store.list();
     expect(all).toHaveLength(1);
+  });
+
+  it('backs up and returns empty on corrupt credentials file', async () => {
+    const filePath = path.join(testDir, 'credentials.enc');
+    fs.writeFileSync(filePath, 'corrupt-data', { mode: 0o600 });
+
+    const loaded = await store.list();
+    expect(loaded).toEqual([]);
+    expect(fs.existsSync(filePath + '.bak')).toBe(true);
+    expect(fs.readFileSync(filePath + '.bak', 'utf-8')).toBe('corrupt-data');
+  });
+
+  it('two stores with different keys cannot read each other', async () => {
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'email-mcp-test2-'));
+    try {
+      await store.save({
+        id: 'iso-1',
+        name: 'Isolated',
+        provider: ProviderType.Gmail as const,
+        email: 'iso@example.com',
+        oauth: { access_token: 'a', refresh_token: 'r', expiry: '' },
+      });
+
+      // Copy the credentials file to dir2 (different key)
+      resetKeyCache();
+      const store2 = new CredentialStore(dir2);
+      fs.copyFileSync(
+        path.join(testDir, 'credentials.enc'),
+        path.join(dir2, 'credentials.enc'),
+      );
+
+      // store2 can't decrypt it — gets empty result and creates backup
+      const loaded = await store2.list();
+      expect(loaded).toEqual([]);
+    } finally {
+      fs.rmSync(dir2, { recursive: true, force: true });
+    }
   });
 });
