@@ -197,7 +197,7 @@ export class GmailAdapter implements EmailProvider {
     const res = await gmail.users.drafts.create({
       userId: 'me',
       requestBody: {
-        message: { raw },
+        message: { raw, ...(params.threadId && { threadId: params.threadId }) },
       },
     });
 

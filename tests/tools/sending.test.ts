@@ -331,6 +331,97 @@ describe('Sending tools', () => {
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.id).toBe('draft-1');
     });
+
+    it('returns error when to/subject missing for standalone draft', async () => {
+      const result = await callTool(server, 'email_draft_create', {
+        accountId: 'acct-1',
+        body: { text: 'Draft body' },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toContain('to and subject are required');
+    });
+
+    it('creates reply draft with threading headers', async () => {
+      const originalEmail = makeEmail({
+        id: 'orig-1',
+        threadId: 'thread-99',
+        from: { email: 'alice@example.com', name: 'Alice' },
+        to: [{ email: 'me@example.com' }],
+        subject: 'Original Subject',
+        headers: { 'message-id': '<orig-1@example.com>' },
+      });
+      (mockProvider.getEmail as ReturnType<typeof vi.fn>).mockResolvedValue(originalEmail);
+
+      const result = await callTool(server, 'email_draft_create', {
+        accountId: 'acct-1',
+        emailId: 'orig-1',
+        body: { text: 'My reply draft' },
+      });
+
+      expect(mockProvider.getEmail).toHaveBeenCalledWith('orig-1');
+      expect(mockProvider.createDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: [{ email: 'alice@example.com', name: 'Alice' }],
+          subject: 'Re: Original Subject',
+          body: { text: 'My reply draft' },
+          inReplyTo: '<orig-1@example.com>',
+          references: ['<orig-1@example.com>'],
+          threadId: 'thread-99',
+        }),
+      );
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.id).toBe('draft-1');
+    });
+
+    it('creates reply-all draft with cc recipients', async () => {
+      const originalEmail = makeEmail({
+        from: { email: 'alice@example.com', name: 'Alice' },
+        to: [{ email: 'me@example.com' }, { email: 'bob@example.com' }],
+        cc: [{ email: 'carol@example.com' }],
+        subject: 'Group discussion',
+        headers: { 'message-id': '<group-1@example.com>' },
+      });
+      (mockProvider.getEmail as ReturnType<typeof vi.fn>).mockResolvedValue(originalEmail);
+
+      await callTool(server, 'email_draft_create', {
+        accountId: 'acct-1',
+        emailId: 'group-1',
+        body: { text: 'Reply all draft' },
+        replyAll: true,
+      });
+
+      const draftCall = (mockProvider.createDraft as ReturnType<typeof vi.fn>).mock.calls[0][0] as SendEmailParams;
+      expect(draftCall.to).toEqual(
+        expect.arrayContaining([
+          { email: 'alice@example.com', name: 'Alice' },
+          { email: 'me@example.com' },
+          { email: 'bob@example.com' },
+        ]),
+      );
+      expect(draftCall.cc).toEqual([{ email: 'carol@example.com' }]);
+    });
+
+    it('does not duplicate Re: prefix on reply draft', async () => {
+      const originalEmail = makeEmail({
+        subject: 'Re: Already a reply',
+        headers: { 'message-id': '<re-1@example.com>' },
+      });
+      (mockProvider.getEmail as ReturnType<typeof vi.fn>).mockResolvedValue(originalEmail);
+
+      await callTool(server, 'email_draft_create', {
+        accountId: 'acct-1',
+        emailId: 're-1',
+        body: { text: 'Another reply' },
+      });
+
+      expect(mockProvider.createDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subject: 'Re: Already a reply',
+        }),
+      );
+    });
   });
 
   describe('email_draft_list', () => {

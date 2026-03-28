@@ -20,6 +20,7 @@ export interface SendEmailParams {
   attachments?: Array<{ filename: string; content: Buffer; contentType: string }>;
   inReplyTo?: string;
   references?: string[];
+  threadId?: string;
 }
 
 export interface EmailProvider {

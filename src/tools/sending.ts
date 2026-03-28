@@ -171,21 +171,59 @@ export function registerSendingTools(server: McpServer, accountManager: AccountM
   // --- email_draft_create ---
   server.tool(
     'email_draft_create',
-    'Create a new email draft',
+    'Create a new email draft. To create a reply draft, provide emailId of the message to reply to.',
     {
       accountId: z.string(),
-      to: z.array(ContactSchema),
-      subject: z.string(),
+      to: z.array(ContactSchema).optional(),
+      subject: z.string().optional(),
       body: BodySchema,
+      emailId: z.string().optional().describe('Email ID to reply to (creates a reply draft)'),
+      replyAll: z.boolean().optional().describe('Include all recipients when replying'),
     },
     async (args) => {
       try {
         const provider = await accountManager.getProvider(args.accountId);
-        const params: SendEmailParams = {
-          to: args.to,
-          subject: args.subject,
-          body: args.body,
-        };
+
+        let params: SendEmailParams;
+
+        if (args.emailId) {
+          // Reply draft — mirror email_reply logic
+          const original = await provider.getEmail(args.emailId);
+          const messageId = original.headers?.['message-id'] ?? original.id;
+
+          const subject = args.subject
+            ?? (original.subject.startsWith('Re: ')
+              ? original.subject
+              : `Re: ${original.subject}`);
+
+          let to = args.to ?? [original.from];
+          let cc: SendEmailParams['cc'];
+
+          if (args.replyAll && !args.to) {
+            to = [original.from, ...original.to];
+            cc = original.cc;
+          }
+
+          params = {
+            to,
+            cc,
+            subject,
+            body: args.body,
+            inReplyTo: messageId,
+            references: [messageId],
+            threadId: original.threadId,
+          };
+        } else {
+          if (!args.to || !args.subject) {
+            return jsonResult({ error: 'to and subject are required for standalone drafts' });
+          }
+          params = {
+            to: args.to,
+            subject: args.subject,
+            body: args.body,
+          };
+        }
+
         const result = await provider.createDraft(params);
         return jsonResult(result);
       } catch (error: any) {
